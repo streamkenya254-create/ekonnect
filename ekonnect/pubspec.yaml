@@ -1,0 +1,83 @@
+name: ekonnect
+description: "Emergency response app connecting users, ambulances, and practitioners."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.11.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Firebase
+  firebase_core: ^3.6.0
+  firebase_auth: ^5.3.1
+  cloud_firestore: ^5.4.4
+  firebase_database: ^11.1.2
+  firebase_messaging: ^15.1.3
+
+  # Google
+  google_maps_flutter: ^2.9.0
+  google_sign_in: ^6.2.1
+
+  # Location
+  geolocator: ^13.0.2
+
+  # State & Navigation
+  provider: ^6.1.2
+
+  # UI helpers
+  flutter_svg: ^2.0.10
+
+  # Utils
+  url_launcher: ^6.3.1
+  shared_preferences: ^2.3.2
+  intl: ^0.20.1
+  uuid: ^4.5.1
+  http: ^1.2.2
+
+  # Native launch screen (kept on-screen until auth bootstrap resolves)
+  flutter_native_splash: ^2.4.4
+
+  # Voice: spoken turn-by-turn guidance, and spoken emergency reporting
+  flutter_tts: ^4.2.5
+  speech_to_text: ^7.4.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.1
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/images/
+    - assets/images/logo.png
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  # logo.png is white artwork on a transparent background, so it is invisible on a
+  # white icon background. These pre-composited assets put it on the brand purple.
+  image_path: "assets/icon/app_icon.png"
+  adaptive_icon_background: "#3D1152" # AppColors.primary
+  adaptive_icon_foreground: "assets/icon/app_icon_foreground.png"
+  adaptive_icon_foreground_inset: 0 # art is already inset to the 60% keyline
+  remove_alpha_ios: true
+  background_color_ios: "#3D1152"
+
+flutter_native_splash:
+  color: "#3D1152" # AppColors.primary — matches the app chrome, not white
+  image: assets/icon/splash_logo.png
+  android: true
+  ios: true
+  web: false
+
+  # Android 12+ draws its own splash: a circle-masked icon on a solid colour.
+  # Use the emblem-only mark here — the wordmark would be cropped by the mask.
+  android_12:
+    color: "#3D1152"
+    image: assets/icon/app_icon_foreground.png
+    icon_background_color: "#3D1152"

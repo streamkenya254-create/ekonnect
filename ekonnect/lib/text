@@ -1,0 +1,2 @@
+ https://ekonnectapp.web.app
+ npm run build && firebase deploy --only hosting --project ekonnectapp

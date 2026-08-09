@@ -1,0 +1,36 @@
+# Build output and dependencies — regenerated, and far too large to version.
+build/
+dist/
+node_modules/
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+*.apk
+*.aab
+
+# Firebase CLI local deploy cache
+.firebase/
+firebase-debug.log
+
+# Gradle / Android
+ekonnect/android/.gradle/
+ekonnect/android/local.properties
+ekonnect/android/app/google-services.json.bak
+*.jks
+*.keystore
+
+# iOS / macOS
+ekonnect/ios/Pods/
+ekonnect/ios/.symlinks/
+**/Flutter/Flutter.framework
+**/Flutter/Generated.xcconfig
+.DS_Store
+
+# Editor
+.idea/
+.vscode/
+*.iml
+
+# Local scratch
+docs/node_modules/

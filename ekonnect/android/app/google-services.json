@@ -1,0 +1,54 @@
+{
+  "project_info": {
+    "project_number": "365887153225",
+    "project_id": "ekonnectapp",
+    "storage_bucket": "ekonnectapp.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:365887153225:android:dc779b7cc79511e9c90b98",
+        "android_client_info": {
+          "package_name": "ke.co.tafiti.ekonnect"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "365887153225-gh9ou6nusn6luv7fcjcam6m23ifm84s8.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "ke.co.tafiti.ekonnect",
+            "certificate_hash": "bb406b986365de6361832a2824d810f8dbe348e8"
+          }
+        },
+        {
+          "client_id": "365887153225-58f1kp17cja5bdfsn7br2qtfjg1i74bo.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCWZNqPl2Tvg7Zz8NXvuD0E86wPRJi2DQc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "365887153225-58f1kp17cja5bdfsn7br2qtfjg1i74bo.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "365887153225-5d1ledsguggppt1aaqlsucitgljpr0ut.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "ke.co.tafiti.ekonnect"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
