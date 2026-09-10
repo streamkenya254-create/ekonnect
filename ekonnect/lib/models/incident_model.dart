@@ -18,6 +18,10 @@ class IncidentModel {
   final String? assignedToSpecialization;
   final String? assignedToLicenseNumber;
   final String? assignedToVehicleNumber;
+  /// The facility the responder answers for — "Oasis Hospital". Denormalised
+  /// at accept time from the responder's profile so the patient sees who is
+  /// coming *and* who they answer to, without a second lookup.
+  final String? assignedToFacilityName;
   final String? assignedTeamId;
   final List<String> notifiedTeamIds;
   final List<Map<String, dynamic>> timeline;
@@ -53,6 +57,22 @@ class IncidentModel {
 
   /// The private provider this call belongs to, when [routingScope] is private.
   final String? routedTeamId;
+
+  /// Responders who handed this call on. They are never offered it again —
+  /// a crew that could not help would otherwise keep receiving it.
+  final List<String> declinedBy;
+
+  /// Why a crew attended but could not finish. Required when an incident is
+  /// closed unresolved, and shown to the patient and the console.
+  final String? closedReason;
+
+  /// A crew already on scene has asked for a second crew. The job stays theirs;
+  /// this only opens it to others as backup.
+  final bool backupRequested;
+  final String? backupReason;
+
+  /// Everyone answering this call, primary first.
+  final List<Map<String, dynamic>> assignees;
   final String? routedTeamName;
 
   /// 'user' or 'responder' — who ended the incident. Null unless cancelled.
@@ -78,6 +98,7 @@ class IncidentModel {
     this.assignedToSpecialization,
     this.assignedToLicenseNumber,
     this.assignedToVehicleNumber,
+    this.assignedToFacilityName,
     this.assignedTeamId,
     this.notifiedTeamIds = const [],
     this.timeline = const [],
@@ -87,6 +108,11 @@ class IncidentModel {
     this.referrals = const [],
     this.routingScope = ResponderVisibility.public,
     this.routedTeamId,
+    this.declinedBy = const [],
+    this.closedReason,
+    this.backupRequested = false,
+    this.backupReason,
+    this.assignees = const [],
     this.routedTeamName,
     this.responderLat,
     this.responderLng,
@@ -117,6 +143,7 @@ class IncidentModel {
       assignedToSpecialization: map['assignedToSpecialization'],
       assignedToLicenseNumber: map['assignedToLicenseNumber'],
       assignedToVehicleNumber: map['assignedToVehicleNumber'],
+      assignedToFacilityName: map['assignedToFacilityName'],
       assignedTeamId: map['assignedTeamId'],
       notifiedTeamIds: List<String>.from(map['notifiedTeamIds'] ?? []),
       timeline: List<Map<String, dynamic>>.from(map['timeline'] ?? []),
@@ -131,6 +158,12 @@ class IncidentModel {
       // Incidents created before private routing existed are public calls.
       routingScope: map['routingScope'] ?? ResponderVisibility.public,
       routedTeamId: map['routedTeamId'],
+      declinedBy: List<String>.from(map['declinedBy'] ?? const []),
+      closedReason: map['closedReason'],
+      backupRequested: map['backupRequested'] ?? false,
+      backupReason: map['backupReason'],
+      assignees: List<Map<String, dynamic>>.from(
+          (map['assignees'] ?? const []).map((e) => Map<String, dynamic>.from(e))),
       routedTeamName: map['routedTeamName'],
       responderLat: (map['responderLat'] as num?)?.toDouble(),
       responderLng: (map['responderLng'] as num?)?.toDouble(),
@@ -159,6 +192,7 @@ class IncidentModel {
         'assignedToSpecialization': assignedToSpecialization,
         'assignedToLicenseNumber': assignedToLicenseNumber,
         'assignedToVehicleNumber': assignedToVehicleNumber,
+        'assignedToFacilityName': assignedToFacilityName,
         'assignedTeamId': assignedTeamId,
         'notifiedTeamIds': notifiedTeamIds,
         'timeline': timeline,
@@ -168,6 +202,11 @@ class IncidentModel {
         'referrals': referrals,
         'routingScope': routingScope,
         'routedTeamId': routedTeamId,
+        'declinedBy': declinedBy,
+        'closedReason': closedReason,
+        'backupRequested': backupRequested,
+        'backupReason': backupReason,
+        'assignees': assignees,
         'routedTeamName': routedTeamName,
         'cancelledBy': cancelledBy,
         'cancelReason': cancelReason,
@@ -183,6 +222,7 @@ class IncidentModel {
     String? assignedToSpecialization,
     String? assignedToLicenseNumber,
     String? assignedToVehicleNumber,
+    String? assignedToFacilityName,
     String? assignedTeamId,
     List<Map<String, dynamic>>? timeline,
     DateTime? resolvedAt,
@@ -204,6 +244,7 @@ class IncidentModel {
         assignedToSpecialization: assignedToSpecialization ?? this.assignedToSpecialization,
         assignedToLicenseNumber: assignedToLicenseNumber ?? this.assignedToLicenseNumber,
         assignedToVehicleNumber: assignedToVehicleNumber ?? this.assignedToVehicleNumber,
+        assignedToFacilityName: assignedToFacilityName ?? this.assignedToFacilityName,
         assignedTeamId: assignedTeamId ?? this.assignedTeamId,
         notifiedTeamIds: notifiedTeamIds,
         timeline: timeline ?? this.timeline,
@@ -228,5 +269,10 @@ class IncidentModel {
   bool get isPending => status == 'pending';
   bool get isActive =>
       status == 'assigned' || status == 'en_route' || status == 'arrived';
-  bool get isClosed => status == 'resolved' || status == 'cancelled';
+  /// Delegates to [IncidentStatus.closed] rather than listing statuses here.
+  /// This used to test resolved/cancelled only, so a job closed as
+  /// 'not resolved' counted as still live: its card stayed on the home
+  /// screen and, because an open emergency hides the SOS selector, the
+  /// caller could not raise a new one.
+  bool get isClosed => IncidentStatus.isClosed(status);
 }

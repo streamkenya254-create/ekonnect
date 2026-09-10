@@ -29,7 +29,13 @@ export const STATUS_META = {
   arrived: { label: 'Arrived', color: '#5C6BC0', bg: '#E8EAF6' },
   resolved: { label: 'Resolved', color: '#2E7D32', bg: '#E8F5E9' },
   cancelled: { label: 'Cancelled', color: '#757575', bg: '#F5F5F5' },
+  // Attended but not finished. Amber, not grey: a cancel is a non-event, this
+  // is a call the network failed to complete and someone should look at it.
+  closed_unresolved: { label: 'Not resolved', color: '#B45309', bg: '#FEF3C7' },
 }
+
+/** Terminal states — nothing further can happen to the incident. */
+export const CLOSED_STATUSES = ['resolved', 'cancelled', 'closed_unresolved']
 
 export function getMeta(map, key, field) {
   return map[key]?.[field] ?? key

@@ -22,6 +22,35 @@ class TeamModel {
   /// Contact shown to a subscriber, and used on the responder's profile.
   final String? contactPhone;
 
+  /// The 3am line, when the facility keeps one separate from reception.
+  final String? dispatchPhone;
+
+  /// `verified` once an administrator has checked the licence. Nothing else
+  /// should ever be offered to a subscriber.
+  final String? verificationStatus;
+
+  final String? description;
+  final String? county;
+  final String? town;
+  final String? type;
+  final List<String> services;
+
+  /// False when they are full. A provider that cannot take a case is worse
+  /// than useless to a subscriber who thinks they can.
+  final bool acceptingCases;
+  final bool open24Hours;
+
+  /// What this facility charges its own subscribers, and how to pay it.
+  ///
+  /// eKonnect collects nothing and processes nothing: money goes straight
+  /// to the facility, so all the app can do is show the client where to
+  /// send it. Any of these may be blank on a Care Point that has not filled
+  /// them in, and the UI has to survive that.
+  final String? coverPrice;
+  final String? coverDays;
+  final String? payBill;
+  final String? payAccount;
+
   const TeamModel({
     required this.id,
     required this.name,
@@ -32,9 +61,33 @@ class TeamModel {
     this.memberIds = const [],
     this.visibility = ResponderVisibility.public,
     this.contactPhone,
+    this.dispatchPhone,
+    this.verificationStatus,
+    this.description,
+    this.county,
+    this.town,
+    this.type,
+    this.services = const [],
+    this.acceptingCases = true,
+    this.open24Hours = false,
+    this.coverPrice,
+    this.coverDays,
+    this.payBill,
+    this.payAccount,
   });
 
   bool get isPrivate => visibility == ResponderVisibility.private;
+
+  /// True when a subscriber can actually be told how to pay them.
+  bool get hasPaymentDetails => (payBill ?? '').trim().isNotEmpty;
+
+  bool get isVerified => verificationStatus == 'verified';
+
+  /// Where they are, in the one line a subscriber cares about.
+  String get placeLabel {
+    final parts = [town, county].where((p) => (p ?? '').isNotEmpty);
+    return parts.isEmpty ? '' : parts.join(', ');
+  }
 
   factory TeamModel.fromMap(String id, Map<String, dynamic> map) {
     return TeamModel(
@@ -49,6 +102,20 @@ class TeamModel {
       // behaving exactly as they did.
       visibility: map['visibility'] ?? ResponderVisibility.public,
       contactPhone: map['contactPhone'],
+      dispatchPhone: map['dispatchPhone'],
+      verificationStatus: map['verificationStatus'],
+      description: map['description'],
+      county: map['county'],
+      town: map['town'],
+      type: map['type'],
+      services: List<String>.from(map['services'] ?? const []),
+      acceptingCases: map['acceptingCases'] ?? true,
+      open24Hours: map['open24Hours'] ?? false,
+      // Written as text by the console's number inputs.
+      coverPrice: map['coverPrice']?.toString(),
+      coverDays: map['coverDays']?.toString(),
+      payBill: map['payBill']?.toString(),
+      payAccount: map['payAccount']?.toString(),
     );
   }
 

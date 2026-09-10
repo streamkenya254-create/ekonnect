@@ -11,10 +11,10 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/app_assets.dart';
 import '../../core/constants.dart';
+import '../../widgets/user_avatar.dart';
 import '../../models/incident_model.dart';
 import '../../models/user_model.dart';
 import '../../providers/auth_provider.dart';
-import 'complete_profile_sheet.dart';
 import 'voice_report_sheet.dart';
 import '../../providers/incident_provider.dart';
 import '../../services/firestore_service.dart';
@@ -91,15 +91,14 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
     if (await canLaunchUrl(uri)) launchUrl(uri);
   }
 
-  Future<void> _openProfileSheet() async {
-    await showModalBottomSheet<bool>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (_) => const CompleteProfileSheet(),
-    );
-    // AuthProvider streams the user doc, so the prompt updates itself once
-    // saved — nothing to refresh here.
+  /// Opens the profile.
+  ///
+  /// Deliberately the same page, in the same state, as tapping the avatar.
+  /// Arriving pre-opened in edit mode made "finish setting up your profile"
+  /// look like a second, near-identical screen. AuthProvider streams the user
+  /// doc, so the prompt here updates itself on the way back.
+  Future<void> _openProfile() async {
+    await Navigator.pushNamed(context, AppRoutes.profile);
   }
 
   /// Opens spoken reporting. The sheet returns a category (AI-derived or picked
@@ -261,15 +260,13 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
 
     return Scaffold(
       key: _scaffoldKey,
-      backgroundColor: AppColors.primaryDark,
+      backgroundColor: AppColors.surfaceAlt,
       drawer: _buildDrawer(auth),
-      body: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 400),
-        switchInCurve: Curves.easeOutCubic,
-        child: hasActive
-            ? _buildTracking(activeIncident)
-            : _buildIdle(firstName),
-      ),
+      // One map, one sheet. What changes is what the sheet holds: the SOS
+      // selector, or the emergency already under way. Swapping whole screens
+      // meant two GoogleMap instances, two cameras, and a jump every time the
+      // state changed under the user.
+      body: _buildHome(firstName, hasActive ? activeIncident : null),
     );
   }
 
@@ -279,46 +276,21 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
     final shortRole = role == AppRoles.ambulance ? 'Ambulance' : 'Responder';
     return AppDrawer(
       name: auth.user?.name ?? 'User',
+      user: auth.user,
       subtitle: isResponder ? shortRole : 'Emergency User',
-      subtitleIcon: Icons.emergency_rounded,
+      // Only what the home screen does not already offer.
+      //
+      // AI Help, History, Providers and Tutorial are tiles on the sheet
+      // below; 999 is the coral bar above them; Profile is the avatar in the
+      // top bar; and "Home" is the screen the drawer is covering. Listing all
+      // of that again made the drawer look full while saying nothing new.
       children: [
         DrawerTile(
-          icon: Icons.home_rounded,
-          label: 'Home',
-          onTap: () => Navigator.pop(context),
-        ),
-        DrawerTile(
-          icon: Icons.smart_toy_rounded,
-          label: 'AI Assistant',
-          badge: 'NEW',
+          icon: Icons.notifications_none_rounded,
+          label: 'Notifications',
           onTap: () {
             Navigator.pop(context);
-            Navigator.pushNamed(context, AppRoutes.aiChat);
-          },
-        ),
-        DrawerTile(
-          icon: Icons.history_rounded,
-          label: 'History',
-          onTap: () {
-            Navigator.pop(context);
-            Navigator.pushNamed(context, AppRoutes.incidentHistory);
-          },
-        ),
-        DrawerTile(
-          icon: Icons.play_circle_rounded,
-          label: 'Tutorial',
-          onTap: () {
-            Navigator.pop(context);
-            Navigator.pushNamed(context, AppRoutes.tutorial);
-          },
-        ),
-        const DrawerSection('Account'),
-        DrawerTile(
-          icon: Icons.person_rounded,
-          label: 'Profile',
-          onTap: () {
-            Navigator.pop(context);
-            Navigator.pushNamed(context, AppRoutes.profile);
+            Navigator.pushNamed(context, AppRoutes.notifications);
           },
         ),
         DrawerTile(
@@ -340,16 +312,6 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
           ),
         const DrawerDivider(),
         DrawerTile(
-          icon: Icons.call_rounded,
-          label: 'Call 999',
-          emergency: true,
-          onTap: () async {
-            Navigator.pop(context);
-            final uri = Uri(scheme: 'tel', path: '999');
-            if (await canLaunchUrl(uri)) launchUrl(uri);
-          },
-        ),
-        DrawerTile(
           icon: Icons.logout_rounded,
           label: 'Sign Out',
           emergency: true,
@@ -368,9 +330,8 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
   // ── Idle home — full-screen responders map with a draggable content sheet ──
   // Dragging the sheet down animates the live map to full-page; dragging up
   // brings the SOS controls back over it.
-  Widget _buildIdle(String firstName) {
+  Widget _buildHome(String firstName, IncidentModel? active) {
     return Stack(
-      key: const ValueKey('idle'),
       children: [
         // Background: live responders map, full screen.
         Positioned.fill(child: _responderMapLayer()),
@@ -378,48 +339,51 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
         // Floating top bar over the map.
         SafeArea(
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             child: Row(
               children: [
                 _MapFab(
                   onTap: () => _scaffoldKey.currentState?.openDrawer(),
-                  child: const Icon(Icons.menu_rounded, color: AppColors.textDark, size: 22),
+                  child: const Icon(Icons.menu_rounded,
+                      color: AppColors.textDark, size: 24),
                 ),
-                const SizedBox(width: 10),
+                const SizedBox(width: 12),
                 Expanded(
                   child: Container(
-                    height: 44,
+                    height: 52,
                     decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(22),
+                      color: Colors.white.withValues(alpha: 0.95),
+                      borderRadius: BorderRadius.circular(26),
                       boxShadow: [
-                        BoxShadow(color: Colors.black.withValues(alpha: 0.12), blurRadius: 10, offset: const Offset(0, 2)),
+                        BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.08),
+                            blurRadius: 15,
+                            offset: const Offset(0, 4)),
                       ],
                     ),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Container(
-                          width: 26, height: 26,
-                          padding: const EdgeInsets.all(5),
-                          decoration: const BoxDecoration(color: AppColors.textDark, shape: BoxShape.circle),
-                          child: Image.asset(AppAssets.logo, fit: BoxFit.contain),
-                        ),
-                        const SizedBox(width: 8),
+                        // The purple mark is its own disc, so it needs no
+                        // plate behind it on the white bar.
+                        Image.asset(AppAssets.logoPurple,
+                            width: 30, height: 30, fit: BoxFit.contain),
+                        const SizedBox(width: 10),
                         const Text('eKonnect',
                             style: TextStyle(
                                 color: AppColors.textDark,
-                                fontWeight: FontWeight.bold,
-                                fontSize: 15,
-                                letterSpacing: 0.3)),
+                                fontWeight: FontWeight.w800,
+                                fontSize: 16,
+                                letterSpacing: -0.3)),
                       ],
                     ),
                   ),
                 ),
-                const SizedBox(width: 10),
+                const SizedBox(width: 12),
                 _MapFab(
-                  onTap: () => Navigator.pushNamed(context, AppRoutes.profile),
-                  child: const Icon(Icons.person_outline_rounded, color: AppColors.textDark, size: 22),
+                  onTap: () => Navigator.pushNamed(context, AppRoutes.settings),
+                  child: const Icon(Icons.settings_rounded,
+                      color: AppColors.textDark, size: 22),
                 ),
               ],
             ),
@@ -435,11 +399,11 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
             return false;
           },
           child: DraggableScrollableSheet(
-            initialChildSize: 0.58,
-            minChildSize: 0.14,
+            initialChildSize: 0.60,
+            minChildSize: 0.15,
             maxChildSize: 1.0,
             snap: true,
-            snapSizes: const [0.14, 0.58, 1.0],
+            snapSizes: const [0.15, 0.60, 1.0],
             builder: (context, scrollController) {
               final topPad = MediaQuery.of(context).padding.top;
               return ValueListenableBuilder<double>(
@@ -447,129 +411,187 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
                 builder: (context, extent, _) {
                   // Ramp from rounded sheet → flat full page as it nears full.
                   final full = ((extent - 0.9) / 0.1).clamp(0.0, 1.0);
-                  final radius = 30.0 * (1 - full);
+                    final peek = extent < 0.28;
+                  final radius = 32.0 * (1 - full);
                   final topInset = 12 + full * (topPad + 10);
                   return Container(
                     decoration: BoxDecoration(
                       color: AppColors.surface,
                       borderRadius: BorderRadius.vertical(top: Radius.circular(radius)),
-                      boxShadow: const [
-                        BoxShadow(color: Colors.black26, blurRadius: 20, offset: Offset(0, -4)),
+                      boxShadow: [
+                        BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.1),
+                            blurRadius: 30,
+                            offset: const Offset(0, -5)),
                       ],
                     ),
                     child: ListView(
                       controller: scrollController,
-                      padding: EdgeInsets.fromLTRB(20, topInset, 20, 32),
+                      // A peek has nothing below the greeting to scroll into,
+                      // so 32 at the foot only pushed the greeting itself
+                      // against the sheet's edge.
+                      padding: EdgeInsets.fromLTRB(
+                          24, topInset, 24, peek ? 12 : 32),
                       children: [
                         // Drag handle — fades out as the sheet becomes a full page.
                         Center(
                           child: Opacity(
                             opacity: (1 - full).clamp(0.0, 1.0),
                             child: Container(
-                              width: 40,
-                              height: 4,
-                              margin: const EdgeInsets.only(bottom: 16),
+                              width: 48,
+                              height: 5,
+                              margin: const EdgeInsets.only(bottom: 24),
                               decoration: BoxDecoration(
-                                color: AppColors.divider,
-                                borderRadius: BorderRadius.circular(2),
+                                color: AppColors.divider.withValues(alpha: 0.5),
+                                borderRadius: BorderRadius.circular(10),
                               ),
                             ),
                           ),
                         ),
                         // Greeting
-                        Text('Hi, $firstName 👋',
-                            style: const TextStyle(
-                                fontSize: 22,
-                                fontWeight: FontWeight.bold,
-                                color: AppColors.textDark)),
-                        const SizedBox(height: 4),
-                        Text("You're safe. Help is one tap away.",
-                            style: TextStyle(fontSize: 13.5, color: AppColors.textMedium)),
-                        const SizedBox(height: 20),
-                        _SosSelector(sosTypes: _sosTypes, onSOS: _triggerSOS),
-
-                  // Sits below the SOS button, never above it — the emergency
-                  // action must always be the first thing within reach.
-                  Builder(builder: (ctx) {
-                    // Read here rather than closing over `build`: this sheet is
-                    // constructed inside nested builders in another method.
-                    final u = ctx.watch<AuthProvider>().user;
-                    if (u == null || u.isProfileComplete) {
-                      return const SizedBox.shrink();
-                    }
-                    return Padding(
-                      padding: const EdgeInsets.only(top: 14),
-                      child: ProfilePromptCard(
-                        progress: u.profileProgress,
-                        missing: u.missingProfileSteps,
-                        onTap: _openProfileSheet,
-                      ),
-                    );
-                  }),
-
-                  // ── Tier 1: still "send help" ──────────────────────────
-                  // A second door into the SOS above, for callers who cannot
-                  // categorise their own emergency. Sits tight under the
-                  // selector so it reads as part of it, not as a rival card.
-                  const SizedBox(height: 10),
-                  VoiceReportButton(onTap: _startVoiceReport),
-
-                  // ── Tier 2: the lifeline ───────────────────────────────
-                  // 999 outranks everything below because it is what still
-                  // works when the app, the network, or dispatch does not.
-                  const SizedBox(height: 22),
-                  _Call999Bar(onTap: _call999),
-
-                  // ── Tier 3: support, not urgent ────────────────────────
-                  const SizedBox(height: 22),
-                  Text('More',
-                      style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700,
-                          color: AppColors.textMedium,
-                          letterSpacing: 0.3)),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _SupportTile(
-                          icon: Icons.smart_toy_outlined,
-                          label: 'AI Help',
-                          onTap: () =>
-                              Navigator.pushNamed(context, AppRoutes.aiChat),
+                        Row(
+                          children: [
+                            // The one place the user's own face belongs:
+                            // beside their name, not floating over the map.
+                            GestureDetector(
+                              onTap: () => Navigator.pushNamed(
+                                  context, AppRoutes.profile),
+                              child: UserAvatar(
+                                user: context.watch<AuthProvider>().user,
+                                // Two lines of text tall: at 58 it read as an
+                                // afterthought beside a 24pt name.
+                                size: 66,
+                                cornerRadius: 20,
+                                background: AppColors.surfaceAlt,
+                                foreground: AppColors.textDark,
+                              ),
+                            ),
+                            const SizedBox(width: AppSpacing.md),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text('Hi, $firstName',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                          fontSize: 24,
+                                          fontWeight: FontWeight.w800,
+                                          letterSpacing: -0.5,
+                                          color: AppColors.textDark)),
+                                  const SizedBox(height: 3),
+                                  const Text(
+                                      "You're safe. Help is one tap away.",
+                                      style: TextStyle(
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w500,
+                                          color: AppColors.textMedium)),
+                                ],
+                              ),
+                            ),
+                          ],
                         ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: _SupportTile(
-                          asset: AppAssets.history,
-                          label: 'History',
-                          onTap: () => Navigator.pushNamed(
-                              context, AppRoutes.incidentHistory),
+                        // Below this height the sheet cannot show the rest without
+                        // cutting it in half, so it shows none of it. The greeting
+                        // above stays, which is all a peek needs to identify itself.
+                        if (!peek) ...[
+                          const SizedBox(height: 28),
+                          // The emergency under way outranks everything: while
+                          // one is open, this is a tracking sheet.
+                          if (active != null)
+                            _ActiveIncidentCard(
+                              incident: active,
+                              onView: () => Navigator.pushNamed(
+                                  context, AppRoutes.sosWaiting, arguments: {
+                                'type': active.type,
+                                'incidentId': active.id,
+                              }),
+                            )
+                          else
+                            _SosSelector(sosTypes: _sosTypes, onSOS: _triggerSOS),
+
+                    // Sits below the SOS button, never above it — the emergency
+                    // action must always be the first thing within reach.
+                    Builder(builder: (ctx) {
+                      // Read here rather than closing over `build`: this sheet is
+                      // constructed inside nested builders in another method.
+                      final u = ctx.watch<AuthProvider>().user;
+                      if (u == null || u.isProfileComplete) {
+                        return const SizedBox.shrink();
+                      }
+                      return Padding(
+                        padding: const EdgeInsets.only(top: 14),
+                        child: ProfilePromptCard(
+                          progress: u.profileProgress,
+                          missing: u.missingProfileSteps,
+                          onTap: _openProfile,
                         ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: _SupportTile(
-                          icon: Icons.shield_outlined,
-                          label: 'Providers',
-                          onTap: () => Navigator.pushNamed(
-                              context, AppRoutes.myProviders),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: _SupportTile(
-                          asset: AppAssets.tutorial,
-                          label: 'Tutorial',
-                          onTap: () =>
-                              Navigator.pushNamed(context, AppRoutes.tutorial),
-                        ),
-                      ),
+                      );
+                    }),
+
+                    // ── Tier 1: still "send help" ──────────────────────────
+                    // A second door into the SOS above, for callers who cannot
+                    // categorise their own emergency. Sits tight under the
+                    // selector so it reads as part of it, not as a rival card.
+                    if (active == null) ...[
+                      const SizedBox(height: 16),
+                      VoiceReportButton(onTap: _startVoiceReport),
                     ],
-                  ),
-                  const SizedBox(height: 18),
-                  const _SafetyTip(),
+
+                    // ── Tier 2: the lifeline ───────────────────────────────
+                    // 999 outranks everything below because it is what still
+                    // works when the app, the network, or dispatch does not.
+                    const SizedBox(height: 24),
+                    _Call999Bar(onTap: _call999),
+
+                    // ── Tier 3: support, not urgent ────────────────────────
+                    const SizedBox(height: 32),
+                    const Text('Additional Support',
+                        style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                            color: AppColors.textDark)),
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _SupportTile(
+                            icon: Icons.smart_toy_outlined,
+                            label: 'AI Help',
+                            onTap: () =>
+                                Navigator.pushNamed(context, AppRoutes.aiChat),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: _SupportTile(
+                            asset: AppAssets.history,
+                            label: 'History',
+                            onTap: () => Navigator.pushNamed(
+                                context, AppRoutes.incidentHistory),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: _SupportTile(
+                            icon: Icons.shield_outlined,
+                            label: 'Providers',
+                            onTap: () => Navigator.pushNamed(
+                                context, AppRoutes.myProviders),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: _SupportTile(
+                            asset: AppAssets.tutorial,
+                            label: 'Tutorial',
+                            onTap: () =>
+                                Navigator.pushNamed(context, AppRoutes.tutorial),
+                          ),
+                        ),
+                      ],
+                    ),
+                        ],
                       ],
                     ),
                   );
@@ -604,204 +626,30 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
             ),
           ));
         }
-        return Stack(
-          children: [
-            GoogleMap(
-              initialCameraPosition: CameraPosition(
-                target: _position != null
-                    ? LatLng(_position!.latitude, _position!.longitude)
-                    : const LatLng(-1.286389, 36.817223),
-                zoom: 14,
-              ),
-              myLocationEnabled: true,
-              myLocationButtonEnabled: false,
-              zoomControlsEnabled: false,
-              padding: const EdgeInsets.only(top: 70, bottom: 260),
-              markers: markers,
-              onMapCreated: (c) {
-                if (_position != null) {
-                  c.animateCamera(CameraUpdate.newLatLng(
-                      LatLng(_position!.latitude, _position!.longitude)));
-                }
-              },
-            ),
-            // On-duty count + legend, floating below the top bar.
-            Positioned(
-              top: 72,
-              left: 16,
-              right: 16,
-              child: SafeArea(
-                bottom: false,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-                      decoration: BoxDecoration(
-                        color: AppColors.textDark,
-                        borderRadius: BorderRadius.circular(20),
-                        boxShadow: [
-                          BoxShadow(color: Colors.black.withValues(alpha: 0.25), blurRadius: 8),
-                        ],
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(Icons.local_hospital_rounded, color: Colors.white, size: 14),
-                          const SizedBox(width: 5),
-                          Text(
-                            responders.isEmpty ? 'No responders on duty' : '${responders.length} on duty near you',
-                            style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(20),
-                        boxShadow: [
-                          BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 8),
-                        ],
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          _LegendDot(color: _ambulanceColor, label: 'Ambulance'),
-                          const SizedBox(width: 14),
-                          _LegendDot(color: _practitionerColor, label: 'Practitioner'),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  // ── Tracking view — map + active incident card ────────────────────────────
-  Widget _buildTracking(IncidentModel incident) {
-    return Stack(
-      key: const ValueKey('tracking'),
-      children: [
-        GoogleMap(
+        return GoogleMap(
           initialCameraPosition: CameraPosition(
             target: _position != null
                 ? LatLng(_position!.latitude, _position!.longitude)
                 : const LatLng(-1.286389, 36.817223),
-            zoom: 15,
+            zoom: 14,
           ),
           myLocationEnabled: true,
           myLocationButtonEnabled: false,
           zoomControlsEnabled: false,
+          // Keeps Google's own controls clear of the floating bar.
+          padding: const EdgeInsets.only(top: 80, bottom: 260),
+          markers: markers,
           onMapCreated: (c) {
-            _mapController = c;
             if (_position != null) {
               c.animateCamera(CameraUpdate.newLatLng(
                   LatLng(_position!.latitude, _position!.longitude)));
             }
           },
-        ),
-
-        // Top bar
-        SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-            child: Row(
-              children: [
-                _MapFab(
-                  onTap: () => _scaffoldKey.currentState?.openDrawer(),
-                  child: const Icon(Icons.menu_rounded, color: AppColors.textDark, size: 22),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Container(
-                    height: 44,
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(22),
-                      boxShadow: [
-                        BoxShadow(color: Colors.black.withValues(alpha: 0.12), blurRadius: 10, offset: const Offset(0, 2)),
-                      ],
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Container(
-                          width: 26, height: 26,
-                          padding: const EdgeInsets.all(5),
-                          decoration: const BoxDecoration(color: AppColors.textDark, shape: BoxShape.circle),
-                          child: Image.asset(AppAssets.logo, fit: BoxFit.contain),
-                        ),
-                        const SizedBox(width: 8),
-                        const Text('eKonnect',
-                            style: TextStyle(
-                                color: AppColors.textDark,
-                                fontWeight: FontWeight.bold,
-                                fontSize: 15,
-                                letterSpacing: 0.3)),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                _MapFab(
-                  onTap: () => Navigator.pushNamed(context, AppRoutes.profile),
-                  child: const Icon(Icons.person_outline_rounded, color: AppColors.textDark, size: 22),
-                ),
-              ],
-            ),
-          ),
-        ),
-
-        // Right-side FABs
-        Positioned(
-          right: 16,
-          bottom: 120,
-          child: Column(
-            children: [
-              _MapFab(
-                onTap: () {
-                  if (_position != null) {
-                    _mapController?.animateCamera(
-                      CameraUpdate.newLatLng(LatLng(_position!.latitude, _position!.longitude)),
-                    );
-                  }
-                },
-                child: const Icon(Icons.my_location_rounded, color: AppColors.primary, size: 20),
-              ),
-              const SizedBox(height: 10),
-              _MapFab(
-                onTap: _call999,
-                color: AppColors.accent,
-                child: const Icon(Icons.call, color: Colors.white, size: 20),
-              ),
-            ],
-          ),
-        ),
-
-        // Active incident card
-        Positioned(
-          left: 0,
-          right: 0,
-          bottom: 0,
-          child: _ActiveIncidentCard(
-            incident: incident,
-            onView: () => Navigator.pushNamed(context, AppRoutes.sosWaiting, arguments: {
-              'type': incident.type,
-              'incidentId': incident.id,
-            }),
-          ),
-        ),
-      ],
+        );
+      },
     );
   }
+
 }
 
 // ── Quick action button ─────────────────────────────────────────────────────────
@@ -820,29 +668,29 @@ class _Call999Bar extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
         decoration: BoxDecoration(
           color: AppColors.accent,
-          borderRadius: BorderRadius.circular(18),
+          borderRadius: BorderRadius.circular(20),
           boxShadow: [
             BoxShadow(
-              color: AppColors.accent.withValues(alpha: 0.3),
-              blurRadius: 12,
-              offset: const Offset(0, 4),
+              color: AppColors.accent.withValues(alpha: 0.25),
+              blurRadius: 15,
+              offset: const Offset(0, 6),
             )
           ],
         ),
         child: Row(
           children: [
             Container(
-              width: 44,
-              height: 44,
+              width: 48,
+              height: 48,
               decoration: const BoxDecoration(
                   color: Colors.white, shape: BoxShape.circle),
               child: Center(
-                  child: SvgPicture.asset(AppAssets.call, width: 26, height: 26)),
+                  child: SvgPicture.asset(AppAssets.call, width: 24, height: 24)),
             ),
-            const SizedBox(width: 14),
+            const SizedBox(width: 16),
             const Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -850,16 +698,16 @@ class _Call999Bar extends StatelessWidget {
                   Text('Call 999',
                       style: TextStyle(
                           color: Colors.white,
-                          fontSize: 16,
+                          fontSize: 18,
                           fontWeight: FontWeight.bold)),
-                  SizedBox(height: 2),
+                  SizedBox(height: 4),
                   Text('Talk to emergency services now',
-                      style: TextStyle(color: Colors.white70, fontSize: 12)),
+                      style: TextStyle(color: Colors.white70, fontSize: 13)),
                 ],
               ),
             ),
-            const Icon(Icons.arrow_forward_ios_rounded,
-                color: Colors.white70, size: 15),
+            const Icon(Icons.chevron_right_rounded,
+                color: Colors.white, size: 28),
           ],
         ),
       ),
@@ -887,97 +735,28 @@ class _SupportTile extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 14),
+        padding: const EdgeInsets.symmetric(vertical: 16),
         decoration: BoxDecoration(
-          color: AppColors.surfaceAlt,
-          borderRadius: BorderRadius.circular(16),
+          color: AppColors.surfaceAlt.withValues(alpha: 0.5),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: AppColors.divider.withValues(alpha: 0.3)),
         ),
         child: Column(
           children: [
             asset != null
-                ? SvgPicture.asset(asset!, width: 28, height: 28)
+                ? SvgPicture.asset(asset!, width: 26, height: 26)
                 : Icon(icon, color: AppColors.textDark, size: 26),
-            const SizedBox(height: 7),
+            const SizedBox(height: 10),
             Text(label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
                     color: AppColors.textDark,
                     fontSize: 12,
-                    fontWeight: FontWeight.w600)),
+                    fontWeight: FontWeight.w700)),
           ],
         ),
       ),
-    );
-  }
-}
-
-// ── Safety tip banner ────────────────────────────────────────────────────────────
-
-class _SafetyTip extends StatelessWidget {
-  const _SafetyTip();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: AppColors.surfaceAlt,
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 38,
-            height: 38,
-            decoration: const BoxDecoration(
-              color: Colors.white,
-              shape: BoxShape.circle,
-            ),
-            child: const Icon(Icons.tips_and_updates_rounded, color: AppColors.textMedium, size: 20),
-          ),
-          const SizedBox(width: 12),
-          const Expanded(
-            child: Text(
-              'Keep calm and stay where you are after sending an SOS — responders see your live location.',
-              style: TextStyle(fontSize: 12.5, color: AppColors.textMedium, height: 1.4),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ── Map legend dot ───────────────────────────────────────────────────────────────
-
-class _LegendDot extends StatelessWidget {
-  final Color color;
-  final String label;
-  const _LegendDot({required this.color, required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          width: 13,
-          height: 13,
-          decoration: BoxDecoration(
-            color: color,
-            shape: BoxShape.circle,
-            border: Border.all(color: Colors.white, width: 2),
-            boxShadow: [
-              BoxShadow(color: Colors.black.withValues(alpha: 0.15), blurRadius: 2),
-            ],
-          ),
-        ),
-        const SizedBox(width: 6),
-        Text(label,
-            style: const TextStyle(
-                fontSize: 12,
-                color: AppColors.textMedium,
-                fontWeight: FontWeight.w500)),
-      ],
     );
   }
 }
@@ -1304,10 +1083,14 @@ class _SosSelectorState extends State<_SosSelector>
                                           height: 132,
                                           child: CircularProgressIndicator(
                                             value: _sending ? null : holdV,
-                                            strokeWidth: 6,
-                                            backgroundColor: AppColors.divider,
-                                            valueColor: const AlwaysStoppedAnimation(
-                                                AppColors.accent),
+                                            strokeWidth: _sending ? 7 : 6,
+                                            backgroundColor: _sending
+                                                ? AppColors.accent
+                                                    .withValues(alpha: 0.18)
+                                                : AppColors.divider,
+                                            valueColor:
+                                                const AlwaysStoppedAnimation(
+                                                    AppColors.accent),
                                           ),
                                         ),
                                         Container(
@@ -1326,20 +1109,22 @@ class _SosSelectorState extends State<_SosSelector>
                                             ],
                                           ),
                                           child: Center(
-                                            child: _sending
-                                                ? const SizedBox(
-                                                    width: 26,
-                                                    height: 26,
-                                                    child: CircularProgressIndicator(
-                                                        strokeWidth: 3,
-                                                        color: Colors.white),
-                                                  )
-                                                : const Text('SOS',
-                                                    style: TextStyle(
-                                                        color: Colors.white,
-                                                        fontSize: 26,
-                                                        fontWeight: FontWeight.w900,
-                                                        letterSpacing: 1)),
+                                            // The word stays put throughout;
+                                            // only its weight eases back so the
+                                            // button reads as working rather
+                                            // than waiting to be pressed again.
+                                            child: AnimatedOpacity(
+                                              duration: const Duration(
+                                                  milliseconds: 250),
+                                              opacity: _sending ? 0.75 : 1,
+                                              child: const Text('SOS',
+                                                  style: TextStyle(
+                                                      color: Colors.white,
+                                                      fontSize: 26,
+                                                      fontWeight:
+                                                          FontWeight.w900,
+                                                      letterSpacing: 1)),
+                                            ),
                                           ),
                                         ),
                                       ],
@@ -1395,24 +1180,23 @@ class _SosSelectorState extends State<_SosSelector>
 class _MapFab extends StatelessWidget {
   final VoidCallback onTap;
   final Widget child;
-  final Color? color;
-  const _MapFab({required this.onTap, required this.child, this.color});
+  const _MapFab({required this.onTap, required this.child});
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        width: 44,
-        height: 44,
+        width: 52,
+        height: 52,
         decoration: BoxDecoration(
-          color: color ?? Colors.white,
+          color: Colors.white.withValues(alpha: 0.95),
           shape: BoxShape.circle,
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withValues(alpha: 0.15),
-              blurRadius: 10,
-              offset: const Offset(0, 2),
+              color: Colors.black.withValues(alpha: 0.08),
+              blurRadius: 15,
+              offset: const Offset(0, 4),
             ),
           ],
         ),
@@ -1439,7 +1223,7 @@ class _ActiveIncidentCard extends StatelessWidget {
     return SafeArea(
       top: false,
       child: Container(
-        margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+        margin: EdgeInsets.zero,
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(22),
@@ -1455,11 +1239,11 @@ class _ActiveIncidentCard extends StatelessWidget {
             onTap: onView,
             borderRadius: BorderRadius.circular(22),
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+              padding: const EdgeInsets.fromLTRB(18, 18, 18, 18),
               child: Row(
                 children: [
                   Container(
-                    width: 50, height: 50,
+                    width: 56, height: 56,
                     decoration: BoxDecoration(
                       color: AppColors.primary,
                       shape: BoxShape.circle,
@@ -1473,8 +1257,10 @@ class _ActiveIncidentCard extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(label,
-                            style: const TextStyle(
-                                fontWeight: FontWeight.bold, fontSize: 15, color: AppColors.primary)),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: AppText.cardTitle
+                                .copyWith(color: AppColors.primary)),
                         const SizedBox(height: 3),
                         Row(
                           children: [
@@ -1486,18 +1272,20 @@ class _ActiveIncidentCard extends StatelessWidget {
                             else
                               const Icon(Icons.check_circle, size: 12, color: AppColors.primary),
                             const SizedBox(width: 6),
-                            Text(status,
-                                style: TextStyle(
-                                    fontSize: 12,
-                                    color: AppColors.textMedium,
-                                    fontWeight: FontWeight.w500)),
+                            Flexible(
+                              child: Text(status,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: AppText.meta),
+                            ),
                           ],
                         ),
                       ],
                     ),
                   ),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 18, vertical: 11),
                     decoration: BoxDecoration(
                       color: AppColors.accent,
                       borderRadius: BorderRadius.circular(20),
@@ -1514,4 +1302,3 @@ class _ActiveIncidentCard extends StatelessWidget {
     );
   }
 }
-

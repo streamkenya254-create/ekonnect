@@ -2,13 +2,16 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
+import 'package:flutter_svg/flutter_svg.dart';
+
+import '../../core/app_assets.dart';
 import '../../core/constants.dart';
+import 'incident_detail_screen.dart';
 import '../../models/incident_model.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/incident_provider.dart';
 import '../../services/firestore_service.dart';
 import '../../widgets/connection_state_view.dart';
-import '../../widgets/incident_journey_view.dart';
 
 class IncidentHistoryScreen extends StatefulWidget {
   const IncidentHistoryScreen({super.key});
@@ -80,11 +83,7 @@ class _IncidentHistoryScreenState extends State<IncidentHistoryScreen>
           icon: const Icon(Icons.arrow_back_ios_new, size: 20, color: AppColors.textDark),
           onPressed: () => Navigator.maybePop(context),
         ),
-        title: const Text('Emergency History',
-            style: TextStyle(
-                color: AppColors.textDark,
-                fontWeight: FontWeight.bold,
-                fontSize: 18)),
+        title: const Text('Emergency History', style: AppText.appBarTitle),
         centerTitle: false,
         bottom: _isResponder && _tabController != null
             ? TabBar(
@@ -93,7 +92,9 @@ class _IncidentHistoryScreenState extends State<IncidentHistoryScreen>
                 unselectedLabelColor: AppColors.textMedium,
                 indicatorColor: AppColors.primary,
                 indicatorWeight: 2.5,
-                labelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                labelStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
+                unselectedLabelStyle:
+                    const TextStyle(fontWeight: FontWeight.w500, fontSize: 14),
                 tabs: const [
                   Tab(text: 'My Calls'),
                   Tab(text: 'Jobs Handled'),
@@ -217,19 +218,15 @@ class _HistoryListState extends State<_HistoryList> {
         final grouped = _groupByMonth(_data!);
 
         return ListView.builder(
-          padding: const EdgeInsets.fromLTRB(0, 8, 0, 32),
+          padding: const EdgeInsets.fromLTRB(0, 6, 0, 36),
           itemCount: grouped.length,
           itemBuilder: (_, i) {
             final entry = grouped[i];
             if (entry is String) {
               // Month header
               return Padding(
-                padding: const EdgeInsets.fromLTRB(20, 18, 20, 8),
-                child: Text(entry,
-                    style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 17,
-                        color: AppColors.textDark)),
+                padding: const EdgeInsets.fromLTRB(20, 26, 20, 10),
+                child: Text(entry, style: AppText.sectionTitle),
               );
             }
             final incident = entry as IncidentModel;
@@ -297,32 +294,50 @@ class _IncidentRow extends StatelessWidget {
     final dateStr = DateFormat('d MMM').format(incident.createdAt);
     final timeStr = DateFormat('HH:mm').format(incident.createdAt);
 
-    return InkWell(
-      // Tapping opens the full journey: patients are entitled to the same
-      // account of their emergency that the admin audits.
-      onTap: () => _showJourney(context),
-      child: Container(
-      color: Colors.white,
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+      child: Material(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        child: InkWell(
+          // Tapping opens the full journey: patients are entitled to the same
+          // account of their emergency that the admin audits.
+          onTap: () => _showJourney(context),
+          borderRadius: BorderRadius.circular(18),
+          child: Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.divider),
+      ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           // Type icon
           Container(
-            width: 42,
-            height: 42,
+            width: 50,
+            height: 50,
             decoration: BoxDecoration(
               color: isClosed
-                  ? AppColors.background
+                  ? AppColors.surfaceAlt
                   : color.withValues(alpha: 0.12),
-              shape: BoxShape.circle,
+              borderRadius: BorderRadius.circular(15),
             ),
-            child: Icon(
-              isCancelled
-                  ? Icons.block_outlined
-                  : IncidentType.icon(incident.type),
-              color: isClosed ? AppColors.textLight : color,
-              size: 20,
+            child: Center(
+              child: isCancelled
+                  ? Icon(Icons.block_outlined,
+                      color: AppColors.textLight, size: 24)
+                  : SvgPicture.asset(
+                      AppAssets.forIncident(incident.type),
+                      width: 30,
+                      height: 30,
+                      // Cancelled or closed calls fade back; a live one keeps
+                      // the illustration's own colours.
+                      colorFilter: isClosed
+                          ? const ColorFilter.mode(
+                              AppColors.textLight, BlendMode.srcIn)
+                          : null,
+                    ),
             ),
           ),
 
@@ -333,35 +348,35 @@ class _IncidentRow extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Date + status line
+                Text(IncidentType.label(incident.type),
+                    style: AppText.cardTitle),
+                const SizedBox(height: 5),
                 Row(
                   children: [
-                    Text('$dateStr · ',
-                        style: const TextStyle(
-                            color: AppColors.textMedium, fontSize: 12)),
                     _StatusChip(status: incident.status),
+                    const SizedBox(width: 8),
+                    Flexible(
+                      child: Text('$dateStr · $timeStr',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: AppText.meta),
+                    ),
                   ],
                 ),
-                const SizedBox(height: 3),
-                // Type label
-                Text(
-                  IncidentType.label(incident.type),
-                  style: const TextStyle(
-                      fontWeight: FontWeight.w600,
-                      fontSize: 14,
-                      color: AppColors.textDark),
-                ),
-                const SizedBox(height: 2),
-                // Responder or time detail
-                Text(
-                  isResponderView
-                      ? 'Patient: ${incident.userName.isNotEmpty ? incident.userName : "Unknown"}'
-                      : incident.assignedToName != null
-                          ? 'Responder: ${incident.assignedToName}'
-                          : timeStr,
-                  style: const TextStyle(
-                      color: AppColors.textMedium, fontSize: 12),
-                ),
+                // Who was on the other end of it.
+                if (isResponderView || incident.assignedToName != null) ...[
+                  const SizedBox(height: 5),
+                  Text(
+                    isResponderView
+                        ? incident.userName.isNotEmpty
+                            ? incident.userName
+                            : 'Unknown caller'
+                        : incident.assignedToName!,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppText.body.copyWith(fontSize: 13.5),
+                  ),
+                ],
               ],
             ),
           ),
@@ -373,83 +388,38 @@ class _IncidentRow extends StatelessWidget {
             GestureDetector(
               onTap: () => onReRequest(incident.type),
               child: Container(
-                width: 36,
-                height: 36,
+                width: 40,
+                height: 40,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: Colors.white,
-                  border: Border.all(color: AppColors.divider, width: 1.5),
+                  color: AppColors.surfaceAlt,
+                  border: Border.all(color: AppColors.divider),
                 ),
                 child: Icon(
                   isResolved
                       ? Icons.replay_rounded
                       : Icons.refresh_rounded,
-                  size: 18,
+                  size: 19,
                   color: AppColors.textMedium,
                 ),
               ),
             )
-          else if (isResponderView)
-            Text(timeStr,
-                style: const TextStyle(
-                    color: AppColors.textLight,
-                    fontSize: 12)),
+          else
+            const Icon(Icons.chevron_right_rounded,
+                color: AppColors.textLight, size: 22),
         ],
       ),
+          ),
+        ),
       ),
     );
   }
 
   void _showJourney(BuildContext context) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (_) => DraggableScrollableSheet(
-        initialChildSize: 0.75,
-        minChildSize: 0.4,
-        maxChildSize: 0.95,
-        expand: false,
-        builder: (_, controller) => Container(
-          decoration: const BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-          ),
-          child: ListView(
-            controller: controller,
-            padding: const EdgeInsets.fromLTRB(20, 14, 20, 32),
-            children: [
-              Center(
-                child: Container(
-                  width: 40,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: AppColors.divider,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 18),
-              Text(IncidentType.label(incident.type),
-                  style: const TextStyle(
-                      fontSize: 19, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 2),
-              Text(
-                DateFormat('EEEE d MMMM, HH:mm').format(incident.createdAt),
-                style: const TextStyle(
-                    fontSize: 12.5, color: AppColors.textMedium),
-              ),
-              if ((incident.cancelReason ?? '').isNotEmpty) ...[
-                const SizedBox(height: 10),
-                Text('Reason: ${CancelReasons.label(incident.cancelReason)}',
-                    style: const TextStyle(
-                        fontSize: 12.5, color: AppColors.textMedium)),
-              ],
-              const SizedBox(height: 20),
-              IncidentJourneyView(incident: incident, showMetrics: true),
-            ],
-          ),
-        ),
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => IncidentDetailScreen(incident: incident),
       ),
     );
   }
@@ -482,9 +452,14 @@ class _StatusChip extends StatelessWidget {
         color = AppColors.warning;
         label = 'Waiting';
     }
-    return Text(label,
-        style: TextStyle(
-            color: color, fontSize: 12, fontWeight: FontWeight.w500));
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.11),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Text(label, style: AppText.chip.copyWith(color: color)),
+    );
   }
 }
 
@@ -513,18 +488,18 @@ class _EmptyState extends StatelessWidget {
           const SizedBox(height: 20),
           Text(
             isResponder ? 'No jobs yet' : 'No emergency history',
-            style: const TextStyle(
-                fontSize: 17,
-                fontWeight: FontWeight.bold,
-                color: AppColors.textDark),
+            style: AppText.sectionTitle,
           ),
-          const SizedBox(height: 6),
-          Text(
-            isResponder
-                ? 'Jobs you respond to will appear here'
-                : 'Your past emergency requests will appear here',
-            style: const TextStyle(color: AppColors.textMedium, fontSize: 13),
-            textAlign: TextAlign.center,
+          const SizedBox(height: 8),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 40),
+            child: Text(
+              isResponder
+                  ? 'Jobs you respond to will appear here'
+                  : 'Your past emergency requests will appear here',
+              style: AppText.pageSubtitle,
+              textAlign: TextAlign.center,
+            ),
           ),
         ],
       ),

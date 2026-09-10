@@ -23,7 +23,7 @@ class ChatBubble extends StatelessWidget {
           ),
           child: Text(message.text,
               style: const TextStyle(
-                  fontSize: 12, color: AppColors.textMedium)),
+                  fontSize: 13, color: AppColors.textMedium)),
         ),
       );
     }
@@ -55,7 +55,7 @@ class ChatBubble extends StatelessWidget {
             if (!isMe)
               Text(message.senderName,
                   style: const TextStyle(
-                      fontSize: 11,
+                      fontSize: 12.5,
                       fontWeight: FontWeight.bold,
                       color: AppColors.primary)),
             Text(
@@ -69,7 +69,7 @@ class ChatBubble extends StatelessWidget {
             Text(
               DateFormat('HH:mm').format(message.timestamp),
               style: TextStyle(
-                fontSize: 10,
+                fontSize: 11.5,
                 color: isMe
                     ? Colors.white.withValues(alpha: 0.7)
                     : AppColors.textLight,

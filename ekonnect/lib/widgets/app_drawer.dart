@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../core/constants.dart';
+import '../models/user_model.dart';
+import 'user_avatar.dart';
 
 /// Shared, spacious navigation drawer used by both the user and responder
 /// homes. Header is deep purple; items use purple icon-chips, with coral
@@ -8,8 +10,13 @@ import '../core/constants.dart';
 /// [DrawerSection] and [DrawerTile].
 class AppDrawer extends StatelessWidget {
   final String name;
+
+  /// The signed-in user, when the caller has one.
+  ///
+  /// The drawer used to take only a name and derive initials from it, so a
+  /// profile photo could never appear here however many times it was set.
+  final UserModel? user;
   final String subtitle;
-  final IconData subtitleIcon;
   final String? statusText;
   final bool statusActive;
   final List<Widget> children;
@@ -17,8 +24,8 @@ class AppDrawer extends StatelessWidget {
   const AppDrawer({
     super.key,
     required this.name,
+    this.user,
     required this.subtitle,
-    required this.subtitleIcon,
     required this.children,
     this.statusText,
     this.statusActive = false,
@@ -35,7 +42,7 @@ class AppDrawer extends StatelessWidget {
 
     return Drawer(
       backgroundColor: AppColors.surface,
-      width: MediaQuery.of(context).size.width * 0.72,
+      width: MediaQuery.of(context).size.width * 0.80,
       child: Column(
         children: [
           // ── Header ──────────────────────────────────────────────
@@ -56,22 +63,37 @@ class AppDrawer extends StatelessWidget {
             ),
             child: Row(
               children: [
-                Container(
-                  width: 56,
-                  height: 56,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: Colors.white.withValues(alpha: 0.16),
-                    border: Border.all(color: Colors.white.withValues(alpha: 0.35)),
-                  ),
-                  child: Center(
-                    child: Text(initials.isEmpty ? '?' : initials,
-                        style: const TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 20)),
-                  ),
-                ),
+                user != null
+                    ? GestureDetector(
+                        onTap: () {
+                          Navigator.pop(context);
+                          Navigator.pushNamed(context, AppRoutes.profile);
+                        },
+                        child: UserAvatar(
+                          user: user,
+                          size: 56,
+                          background: Colors.white.withValues(alpha: 0.16),
+                          foreground: Colors.white,
+                          ring: Colors.white.withValues(alpha: 0.35),
+                        ),
+                      )
+                    : Container(
+                        width: 56,
+                        height: 56,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: Colors.white.withValues(alpha: 0.16),
+                          border: Border.all(
+                              color: Colors.white.withValues(alpha: 0.35)),
+                        ),
+                        child: Center(
+                          child: Text(initials.isEmpty ? '?' : initials,
+                              style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 20)),
+                        ),
+                      ),
                 const SizedBox(width: 16),
                 Expanded(
                   child: Column(
@@ -82,57 +104,26 @@ class AppDrawer extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
                               color: Colors.white,
-                              fontSize: 17,
-                              fontWeight: FontWeight.bold)),
-                      const SizedBox(height: 5),
-                      Row(
-                        children: [
-                          Icon(subtitleIcon,
-                              size: 13, color: Colors.white.withValues(alpha: 0.7)),
-                          const SizedBox(width: 5),
-                          Flexible(
-                            child: Text(subtitle,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                    color: Colors.white.withValues(alpha: 0.7),
-                                    fontSize: 12.5)),
-                          ),
-                        ],
-                      ),
+                              fontSize: 22,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: -0.4)),
+                      const SizedBox(height: AppSpacing.xs),
+                      Text(subtitle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                              color: Colors.white.withValues(alpha: 0.75),
+                              fontSize: 14,
+                              fontWeight: FontWeight.w500)),
                       if (statusText != null) ...[
-                        const SizedBox(height: 10),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 10, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: statusActive
-                                ? AppColors.accent.withValues(alpha: 0.9)
-                                : Colors.white.withValues(alpha: 0.12),
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Container(
-                                width: 7,
-                                height: 7,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  color: statusActive
-                                      ? Colors.white
-                                      : Colors.white.withValues(alpha: 0.5),
-                                ),
-                              ),
-                              const SizedBox(width: 6),
-                              Text(statusText!,
-                                  style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.w600)),
-                            ],
-                          ),
-                        ),
+                        const SizedBox(height: 4),
+                        Text(statusText!,
+                            style: TextStyle(
+                                color: statusActive
+                                    ? Colors.white
+                                    : Colors.white.withValues(alpha: 0.6),
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600)),
                       ],
                     ],
                   ),
@@ -144,7 +135,7 @@ class AppDrawer extends StatelessWidget {
           // ── Body ────────────────────────────────────────────────
           Expanded(
             child: ListView(
-              padding: const EdgeInsets.symmetric(vertical: 10),
+              padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
               children: children,
             ),
           ),
@@ -162,16 +153,8 @@ class DrawerSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(26, 16, 24, 8),
-      child: Text(
-        label.toUpperCase(),
-        style: const TextStyle(
-          fontSize: 11,
-          fontWeight: FontWeight.bold,
-          color: AppColors.textLight,
-          letterSpacing: 1,
-        ),
-      ),
+      padding: const EdgeInsets.fromLTRB(24, AppSpacing.lg, 24, AppSpacing.sm),
+      child: Text(label, style: AppText.sectionTitle),
     );
   }
 }
@@ -205,30 +188,31 @@ class DrawerTile extends StatelessWidget {
           onTap: onTap,
           borderRadius: BorderRadius.circular(14),
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+            padding: const EdgeInsets.symmetric(
+                horizontal: 12, vertical: AppSpacing.sm),
             child: Row(
               children: [
                 Container(
-                  width: 38,
-                  height: 38,
+                  width: 44,
+                  height: 44,
                   decoration: BoxDecoration(
                     color: color.withValues(alpha: 0.10),
-                    borderRadius: BorderRadius.circular(11),
+                    borderRadius: BorderRadius.circular(AppRadius.control),
                   ),
-                  child: Icon(icon, color: color, size: 20),
+                  child: Icon(icon, color: color, size: 22),
                 ),
-                const SizedBox(width: 14),
+                const SizedBox(width: AppSpacing.md),
                 Expanded(
                   child: Text(label,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                          color: emergency ? AppColors.accent : AppColors.textDark,
-                          fontWeight: FontWeight.w600,
-                          fontSize: 14)),
+                      style: AppText.bodyStrong.copyWith(
+                          color: emergency
+                              ? AppColors.accent
+                              : AppColors.textDark)),
                 ),
                 if (badge != null)
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
                     decoration: BoxDecoration(
                       color: AppColors.accent,
                       borderRadius: BorderRadius.circular(10),
@@ -236,12 +220,12 @@ class DrawerTile extends StatelessWidget {
                     child: Text(badge!,
                         style: const TextStyle(
                             color: Colors.white,
-                            fontSize: 9,
-                            fontWeight: FontWeight.bold)),
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w800)),
                   )
                 else
                   Icon(Icons.chevron_right_rounded,
-                      color: AppColors.textLight.withValues(alpha: 0.7), size: 20),
+                      color: AppColors.textLight.withValues(alpha: 0.7), size: 22),
               ],
             ),
           ),

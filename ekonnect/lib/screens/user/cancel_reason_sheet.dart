@@ -88,7 +88,7 @@ class _CancelReasonSheetState extends State<CancelReasonSheet> {
                     : 'This helps us understand what happened and improve '
                         'response times.',
                 style: const TextStyle(
-                    fontSize: 13, color: AppColors.textMedium, height: 1.35),
+                    fontSize: 14, color: AppColors.textMedium, height: 1.35),
               ),
               const SizedBox(height: 16),
               for (final option in CancelReasons.options)
@@ -206,7 +206,7 @@ class _ReasonTile extends StatelessWidget {
                     Text(
                       option.label,
                       style: TextStyle(
-                        fontSize: 14.5,
+                        fontSize: 15,
                         fontWeight: FontWeight.w600,
                         color:
                             selected ? AppColors.primary : AppColors.textDark,
@@ -216,7 +216,7 @@ class _ReasonTile extends StatelessWidget {
                     Text(
                       option.hint,
                       style: const TextStyle(
-                        fontSize: 11.5,
+                        fontSize: 12.5,
                         color: AppColors.textMedium,
                         height: 1.25,
                       ),

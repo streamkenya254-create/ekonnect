@@ -1,0 +1,245 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function me() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isAdmin() {
+      return request.auth != null && me().role == 'admin';
+    }
+
+    // A Care Point administrator, scoped to exactly one facility. Every rule
+    // below compares against `myTeam()` rather than trusting a teamId sent up
+    // from the browser — the client is not the thing to trust.
+    function isCarePointAdmin() {
+      return request.auth != null && me().role == 'care_point_admin';
+    }
+
+    function myTeam() {
+      return me().teamId;
+    }
+
+    function ownsTeam(teamId) {
+      return isCarePointAdmin() && myTeam() == teamId;
+    }
+
+    // Users: anyone authenticated can read their own doc, create their own doc
+    match /users/{userId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null && request.auth.uid == userId;
+      allow update: if request.auth != null &&
+        (request.auth.uid == userId ||
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin');
+    }
+
+    // Incidents: authenticated users can create; assigned responder or admin can update
+    match /incidents/{incidentId} {
+      allow create: if request.auth != null;
+      allow read: if request.auth != null;
+      allow update: if request.auth != null;
+
+      match /messages/{msgId} {
+        allow read, write: if request.auth != null;
+      }
+    }
+
+    // ── Public intake ──────────────────────────────────────────────────────
+    //
+    // Two collections take writes from people who are not signed in, because
+    // both are filled in by strangers on the public site. Neither is readable
+    // by anyone but an administrator, and neither is dispatchable: an
+    // application is a request to join, not a Care Point.
+    //
+    // Create-only by design. Nobody can go back and edit what they submitted,
+    // which is what stops an accepted application from being rewritten after
+    // an administrator has checked it.
+
+    // Care Point registrations from /register.
+    match /carePointApplications/{id} {
+      allow create: if isValidApplication();
+      allow read, update, delete: if isAdmin();
+    }
+
+    // "Text me a link" submissions from the landing page.
+    match /appLinkRequests/{id} {
+      allow create: if request.resource.data.keys().hasAll(['phone'])
+        && request.resource.data.phone is string
+        && request.resource.data.phone.size() >= 10
+        && request.resource.data.phone.size() <= 20
+        && request.resource.data.get('sent', false) == false;
+      allow read, update, delete: if isAdmin();
+    }
+
+    function isValidApplication() {
+      let d = request.resource.data;
+      return
+        // Cannot arrive pre-approved. Verification is an administrator's act.
+        d.status == 'pending'
+        && d.name is string && d.name.size() >= 2 && d.name.size() <= 120
+        && d.type is string && d.type.size() <= 40
+        && d.description is string && d.description.size() >= 40 && d.description.size() <= 4000
+        && d.contactPhone is string && d.contactPhone.size() >= 7 && d.contactPhone.size() <= 25
+        && d.county is string && d.county.size() <= 60
+        && d.town is string && d.town.size() <= 120
+        // Kenya's bounding box, mirroring the client-side check. A record
+        // pointing outside it is either a mistake or a probe.
+        && d.lat is number && d.lat >= -5 && d.lat <= 5.5
+        && d.lng is number && d.lng >= 33.5 && d.lng <= 42.5
+        // Images are inline data URLs. Bounding them here is what keeps a
+        // stranger from parking megabytes in the database — the client
+        // downscales, but the client is not the thing to trust.
+        && d.get('logo', '') is string && d.get('logo', '').size() <= 400000
+        && d.get('coverImage', '') is string && d.get('coverImage', '').size() <= 700000;
+    }
+
+    // ── Care Point portal ──────────────────────────────────────────────────
+    //
+    // A facility administrator sees their own facility and nothing else. The
+    // portal already filters every query by teamId; these rules are what make
+    // that a boundary rather than a convention.
+
+    // Vehicles belong to one Care Point and are theirs to manage.
+    match /vehicles/{id} {
+      allow read: if isAdmin() || ownsTeam(resource.data.teamId);
+      allow create: if isAdmin() || ownsTeam(request.resource.data.teamId);
+      allow update: if isAdmin()
+        || (ownsTeam(resource.data.teamId)
+            // The owning team cannot be reassigned — that would move a vehicle
+            // into somebody else's fleet.
+            && request.resource.data.teamId == resource.data.teamId);
+      allow delete: if isAdmin() || ownsTeam(resource.data.teamId);
+    }
+
+    // Responder applications. Two doors, one queue:
+    //   · a person applying for themselves at /apply, signed out;
+    //   · a Care Point submitting someone they employ, from the portal.
+    //
+    // Either may create. Only an administrator may decide one — a facility
+    // that could approve its own crew would make the badge meaningless, and a
+    // responder approving themselves would make it a formality.
+    match /responderApplications/{id} {
+      allow read: if isAdmin() || ownsTeam(resource.data.teamId);
+      allow create: if isValidResponderApplication()
+        && (
+          // Submitted by the Care Point that employs them…
+          ownsTeam(request.resource.data.teamId)
+          // …or by the person themselves, who cannot claim an affiliation
+          // they are not signed in to prove.
+          || (request.resource.data.affiliation == 'independent'
+              && request.resource.data.teamId == '')
+          || request.resource.data.affiliation == 'care_point'
+        );
+      allow update, delete: if isAdmin();
+    }
+
+    function isValidResponderApplication() {
+      let d = request.resource.data;
+      return d.status == 'pending'
+        && d.name is string && d.name.size() >= 3 && d.name.size() <= 120
+        && d.email is string && d.email.size() >= 5 && d.email.size() <= 200
+        && d.phone is string && d.phone.size() >= 7 && d.phone.size() <= 25
+        && d.role in ['ambulance', 'practitioner']
+        // The licence is the entire point of the review; an application
+        // without one wastes a reviewer's time.
+        && d.licenseNumber is string && d.licenseNumber.size() >= 3 && d.licenseNumber.size() <= 60
+        && d.get('note', '') is string && d.get('note', '').size() <= 1000;
+    }
+
+    // The facility record. Operational fields are the facility's to change;
+    // identity and verification are not, because those are what the verified
+    // badge attests to.
+    match /teams/{teamId} {
+      // Signed-in: any Care Point, because the app resolves routing against
+      // them and responders need to see who they answer for.
+      //
+      // Signed-out: verified Care Points only. The public responder
+      // application at /apply has to list the facilities someone can say they
+      // work for, and that page is reached before anyone has an account.
+      // Firestore only permits this when the query itself is constrained to
+      // the same condition — an unfiltered listing still fails.
+      allow read: if request.auth != null
+        || resource.data.verificationStatus == 'verified';
+      allow write: if isAdmin();
+
+      // What a facility may change about itself: how it operates, how it is
+      // reached, what it charges its own clients, and whether it serves the
+      // public network or only its own.
+      //
+      // `visibility` is here because going private only ever *narrows* who can
+      // reach them — it claims nothing and grants no extra reach, so it is an
+      // operational choice rather than something verification attests to.
+      // Identity and verification stay admin-only, below.
+      allow update: if ownsTeam(teamId)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+             'acceptingCases', 'open24Hours', 'services', 'description',
+             'contactName', 'contactRole', 'contactPhone', 'dispatchPhone',
+             'email', 'bedCapacity', 'ambulanceCount', 'updatedAt',
+             'visibility', 'coverPrice', 'coverDays', 'payBill', 'payAccount'
+           ])
+        // Never self-verify, and never rename what the badge was issued to.
+        && request.resource.data.visibility in ['public', 'private']
+        && request.resource.data.verificationStatus == resource.data.verificationStatus
+        && request.resource.data.name == resource.data.name;
+    }
+
+    // A client's cover with one private Care Point.
+    //
+    // Two parties, two halves. The client owns the decision to register and to
+    // leave; the facility owns the dates, because eKonnect processes no money
+    // and only the facility knows whether it has been paid. Neither may do the
+    // other's half — a client who could write their own `expiresAt` would be
+    // granting themselves free cover.
+    match /subscriptions/{id} {
+      allow read: if isAdmin()
+        || (request.auth != null && resource.data.userId == request.auth.uid)
+        || ownsTeam(resource.data.teamId);
+
+      allow create: if request.auth != null
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.status == 'active'
+        && request.resource.data.teamId is string
+        // Registering never grants cover. The facility switches that on after
+        // payment, so a self-issued expiry date must not survive the write.
+        && !('expiresAt' in request.resource.data);
+
+      // The client's only edit is to leave.
+      allow update: if isAdmin()
+        || (request.auth != null
+            && resource.data.userId == request.auth.uid
+            && request.resource.data.diff(resource.data).affectedKeys()
+                 .hasOnly(['status', 'cancelledAt'])
+            && request.resource.data.status == 'cancelled')
+        // The facility's only edits are the cover dates.
+        || (ownsTeam(resource.data.teamId)
+            && request.resource.data.diff(resource.data).affectedKeys()
+                 .hasOnly(['expiresAt', 'status', 'coverSetBy', 'coverSetAt'])
+            && request.resource.data.userId == resource.data.userId
+            && request.resource.data.teamId == resource.data.teamId);
+
+      allow delete: if isAdmin();
+    }
+
+    // The kept copy of each push.
+    //
+    // Written only by the Cloud Functions, which run with admin credentials
+    // and bypass these rules — so nobody can write themselves a notification.
+    // A person may read their own and mark it read, nothing more.
+    match /notifications/{id} {
+      allow read: if isAdmin()
+        || (request.auth != null && resource.data.userId == request.auth.uid);
+      allow update: if request.auth != null
+        && resource.data.userId == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['read'])
+        && request.resource.data.read == true;
+      allow create, delete: if isAdmin();
+    }
+
+    // Everything else: admin only
+    match /{document=**} {
+      allow read, write: if isAdmin();
+    }
+  }
+}

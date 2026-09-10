@@ -101,7 +101,13 @@ class UserModel {
       AppRoles.isResponder(role) &&
       VerificationStatus.canGoOnDuty(verificationStatus);
 
-  bool get isPrivateResponder => visibility == ResponderVisibility.private;
+  bool get isPrivateResponder =>
+      ResponderVisibility.isExclusive(visibility);
+
+  /// Answers only the named clients on their Care Point's list. Unlike a
+  /// private crew, a call opened to the public network never reaches them.
+  bool get isClientsOnlyResponder =>
+      visibility == ResponderVisibility.clients;
 
   const UserModel({
     required this.uid,

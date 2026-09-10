@@ -32,6 +32,14 @@ class _ReferralSheetState extends State<ReferralSheet> {
   bool _searching = false;
   String? _error;
 
+  /// True while Google discovery is still running *behind* results already on
+  /// screen — a quieter state than [_searching], which blanks the list.
+  bool _discovering = false;
+
+  /// Set when Google could not be reached. Distinct from having no results:
+  /// a crew needs to know whether the map is empty or the search is broken.
+  String? _discoveryError;
+
   @override
   void initState() {
     super.initState();
@@ -44,25 +52,57 @@ class _ReferralSheetState extends State<ReferralSheet> {
     super.dispose();
   }
 
+  /// Two passes, so something is on screen almost at once.
+  ///
+  /// Pass one is a single Firestore read of the registry. Pass two adds Google
+  /// discovery, AI ranking and road travel times, all of which are slow and
+  /// none of which should hold up a list the crew could already be reading.
   Future<void> _search() async {
     setState(() {
       _searching = true;
       _error = null;
+      _discoveryError = null;
     });
+
+    // ── Pass 1: the registry ────────────────────────────────────────────
     try {
-      var found = await CarePointService.findNearby(
+      final registered =
+          await CarePointService.registeredNearby(widget.origin);
+      if (!mounted) return;
+      setState(() {
+        _results = registered;
+        _searching = false;
+        _discovering = true;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.toString();
+        _searching = false;
+      });
+      return;
+    }
+
+    // ── Pass 2: Google, ranking, travel times ───────────────────────────
+    try {
+      final found = await CarePointService.findNearby(
         origin: widget.origin,
         incidentType: widget.incident.type,
         need: _needCtrl.text.trim(),
       );
-      // Road travel time only for the few actually shown — each is a billed call.
-      found = await CarePointService.withTravelTimes(found, widget.origin);
+      final withTimes =
+          await CarePointService.withTravelTimes(found.points, widget.origin);
       if (!mounted) return;
-      setState(() => _results = found);
+      setState(() {
+        _results = withTimes;
+        _discoveryError = found.discoveryError;
+      });
     } catch (e) {
-      if (mounted) setState(() => _error = e.toString());
+      // Pass 1 already gave them something usable, so this is a downgrade,
+      // not a failure.
+      if (mounted) setState(() => _discoveryError = e.toString());
     } finally {
-      if (mounted) setState(() => _searching = false);
+      if (mounted) setState(() => _discovering = false);
     }
   }
 
@@ -118,7 +158,7 @@ class _ReferralSheetState extends State<ReferralSheet> {
                         : '${alreadyTried.length} place(s) already tried — '
                             'they stay on the record.',
                     style: const TextStyle(
-                        fontSize: 12.5, color: AppColors.textMedium),
+                        fontSize: 13, color: AppColors.textMedium),
                   ),
                   const SizedBox(height: 14),
                   Row(
@@ -144,7 +184,7 @@ class _ReferralSheetState extends State<ReferralSheet> {
                       ),
                       const SizedBox(width: 8),
                       IconButton.filled(
-                        onPressed: _searching ? null : _search,
+                        onPressed: (_searching || _discovering) ? null : _search,
                         style: IconButton.styleFrom(
                             backgroundColor: AppColors.primary),
                         icon: const Icon(Icons.search_rounded, size: 20),
@@ -162,6 +202,48 @@ class _ReferralSheetState extends State<ReferralSheet> {
     );
   }
 
+  /// Sits under the list while Google is still being asked, or afterwards if
+  /// it could not be reached. Either way the registered results above it are
+  /// already usable, so this never blocks the crew.
+  Widget _discoveryFooter() {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: _discovering
+            ? AppColors.primarySoft
+            : AppColors.accent.withValues(alpha: 0.07),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          if (_discovering) ...[
+            const SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            const SizedBox(width: 10),
+            const Expanded(
+              child: Text('Also searching Google for nearby hospitals…',
+                  style:
+                      TextStyle(fontSize: 13, color: AppColors.textMedium)),
+            ),
+          ] else ...[
+            const Icon(Icons.info_outline, size: 16, color: AppColors.accent),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Registered care points only — $_discoveryError',
+                style:
+                    const TextStyle(fontSize: 13, color: AppColors.textMedium),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
   Widget _body(ScrollController controller, Set<String> alreadyTried) {
     if (_searching && _results == null) {
       return const Center(child: CircularProgressIndicator());
@@ -170,26 +252,40 @@ class _ReferralSheetState extends State<ReferralSheet> {
       return _message('Could not search right now.\nCheck your connection.');
     }
     final results = _results ?? const <CarePoint>[];
-    if (results.isEmpty) {
+
+    if (results.isEmpty && !_discovering) {
       return _message(
-        'No care points found nearby.\n'
-        'Registered facilities appear here first; Google results fill the rest.',
+        _discoveryError != null
+            // An empty map and a broken search look identical to a crew unless
+            // we say which one it is.
+            ? 'No registered care points nearby, and the Google search could '
+                'not run.\n\n$_discoveryError\n\n'
+                'Call the receiving facility directly, or add it under Care '
+                'Points so it is here next time.'
+            : 'No care points found nearby.\n'
+                'Registered facilities appear here first; Google results fill '
+                'the rest.',
       );
     }
 
     return ListView.separated(
       controller: controller,
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
-      itemCount: results.length,
+      itemCount:
+          results.length + (_discovering || _discoveryError != null ? 1 : 0),
       separatorBuilder: (_, _) => const SizedBox(height: 10),
-      itemBuilder: (_, i) => _CarePointCard(
-        point: results[i],
-        alreadyTried: alreadyTried.contains(results[i].id),
-        onRefer: () => _refer(results[i]),
-        onCall: results[i].phone == null
-            ? null
-            : () => _call(results[i].phone!),
-      ),
+      itemBuilder: (_, i) {
+        // Footer: what is still coming, or what did not arrive.
+        if (i == results.length) return _discoveryFooter();
+        return _CarePointCard(
+          point: results[i],
+          alreadyTried: alreadyTried.contains(results[i].id),
+          onRefer: () => _refer(results[i]),
+          onCall: results[i].phone == null
+              ? null
+              : () => _call(results[i].phone!),
+        );
+      },
     );
   }
 
@@ -200,7 +296,7 @@ class _ReferralSheetState extends State<ReferralSheet> {
             text,
             textAlign: TextAlign.center,
             style: const TextStyle(
-                fontSize: 13.5, height: 1.5, color: AppColors.textMedium),
+                fontSize: 14, height: 1.5, color: AppColors.textMedium),
           ),
         ),
       );
@@ -252,12 +348,12 @@ class _CarePointCard extends StatelessWidget {
                       children: [
                         Text(CarePointType.label(point.type),
                             style: const TextStyle(
-                                fontSize: 11.5, color: AppColors.textMedium)),
+                                fontSize: 12.5, color: AppColors.textMedium)),
                         if (!point.isVisitable) ...[
                           const SizedBox(width: 6),
                           const Text('• dispatches to you',
                               style: TextStyle(
-                                  fontSize: 11.5,
+                                  fontSize: 12.5,
                                   color: AppColors.textMedium)),
                         ],
                       ],
@@ -279,7 +375,7 @@ class _CarePointCard extends StatelessWidget {
                 child: Text(
                   point.isRegistered ? 'Registered' : 'Unverified',
                   style: TextStyle(
-                    fontSize: 10,
+                    fontSize: 11.5,
                     fontWeight: FontWeight.bold,
                     color: point.isRegistered
                         ? AppColors.success
@@ -315,7 +411,7 @@ class _CarePointCard extends StatelessWidget {
                 Expanded(
                   child: Text(point.matchReason!,
                       style: const TextStyle(
-                          fontSize: 12,
+                          fontSize: 13,
                           height: 1.35,
                           color: AppColors.primary)),
                 ),
@@ -329,7 +425,7 @@ class _CarePointCard extends StatelessWidget {
                 padding: const EdgeInsets.only(bottom: 2),
                 child: Text('• $s',
                     style: const TextStyle(
-                        fontSize: 12, color: AppColors.textDark)),
+                        fontSize: 13, color: AppColors.textDark)),
               ),
           ],
           if ((point.description ?? '').isNotEmpty) ...[
@@ -338,13 +434,13 @@ class _CarePointCard extends StatelessWidget {
                 maxLines: 3,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
-                    fontSize: 12, height: 1.35, color: AppColors.textMedium)),
+                    fontSize: 13, height: 1.35, color: AppColors.textMedium)),
           ],
           if (point.address != null) ...[
             const SizedBox(height: 8),
             Text(point.address!,
                 style: const TextStyle(
-                    fontSize: 11.5, color: AppColors.textLight)),
+                    fontSize: 12.5, color: AppColors.textLight)),
           ],
           const SizedBox(height: 12),
           Row(
@@ -402,7 +498,7 @@ class _CarePointCard extends StatelessWidget {
             const SizedBox(width: 4),
             Text(text,
                 style: const TextStyle(
-                    fontSize: 11.5,
+                    fontSize: 12.5,
                     fontWeight: FontWeight.w600,
                     color: AppColors.textDark)),
           ],

@@ -34,3 +34,11 @@ ekonnect/ios/.symlinks/
 
 # Local scratch
 docs/node_modules/
+
+# Credentials — never versioned, even in a private repo.
+testadmincredentials.json
+**/service-account.json
+
+# Working copies of documents, kept locally rather than versioned.
+*.your-edit.docx
+docs/profile-readme/

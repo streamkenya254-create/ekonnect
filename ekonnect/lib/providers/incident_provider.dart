@@ -14,6 +14,11 @@ class IncidentProvider extends ChangeNotifier {
   StreamSubscription? _activeIncidentSub;
 
   List<IncidentModel> _pendingIncidents = [];
+
+  /// Jobs already under way whose crew has asked for a second pair of hands.
+  /// Kept apart from [_pendingIncidents] so a backup request never looks like
+  /// an unanswered emergency.
+  List<IncidentModel> _backupRequests = [];
   StreamSubscription? _pendingSub;
 
   bool _isLoading = false;
@@ -21,6 +26,7 @@ class IncidentProvider extends ChangeNotifier {
 
   IncidentModel? get activeIncident => _activeIncident;
   List<IncidentModel> get pendingIncidents => _pendingIncidents;
+  List<IncidentModel> get backupRequests => _backupRequests;
   bool get isLoading => _isLoading;
   String? get error => _error;
 
@@ -131,12 +137,33 @@ class IncidentProvider extends ChangeNotifier {
       // and `hasActive` checks treat a closed incident as no incident, so the
       // dashboards fall back to their normal state on their own.
       if (incident == null || incident.isClosed) {
+        // Release our own hold. The party that closed the job could only
+        // write their own user document — the rules forbid touching anyone
+        // else's — so each side lets go here, on seeing the incident close.
+        if (incident != null) _releaseSelf(incident);
         _stopLiveTrackingIfResponder();
         _activeIncidentSub?.cancel();
         _activeIncidentSub = null;
       }
       notifyListeners();
     });
+  }
+
+  /// Clears this device's own `currentIncidentId` once the job is over, so
+  /// the next SOS is not blocked by a finished one.
+  Future<void> _releaseSelf(IncidentModel incident) async {
+    final user = _currentUser;
+    if (user == null) return;
+    if (user.currentIncidentId != incident.id) return;
+    try {
+      final data = <String, dynamic>{'currentIncidentId': null};
+      // A responder is free to take the next call.
+      if (AppRoles.isResponder(user.effectiveRole)) data['isAvailable'] = true;
+      await FirestoreService.updateUser(user.uid, data);
+    } catch (_) {
+      // Best effort: a stale id is recoverable, since re-attaching to a closed
+      // incident is allowed and no longer blocks a new one.
+    }
   }
 
   /// Patients never publish live location, so only stop it for responders —
@@ -205,8 +232,9 @@ class IncidentProvider extends ChangeNotifier {
 
     // OFF-duty responders must not receive new incident alerts.
     if (!user.isAvailable) {
-      if (_pendingIncidents.isNotEmpty) {
+      if (_pendingIncidents.isNotEmpty || _backupRequests.isNotEmpty) {
         _pendingIncidents = [];
+        _backupRequests = [];
         notifyListeners();
       }
       return;
@@ -232,13 +260,23 @@ class IncidentProvider extends ChangeNotifier {
 
     _pendingSub =
         FirestoreService.streamAllPendingIncidents().listen((all) {
-      _pendingIncidents = all
+      final mine = all
           .where((i) => activeStatuses.contains(i.status))
           .where((i) => relevantTypes.contains(i.type))
+          .where((i) => _isRoutedTo(i, user));
+
+      _pendingIncidents = mine
           // Only show incidents not yet taken, or taken by this responder
           .where((i) => i.assignedTo == null || i.assignedTo == user.uid)
-          .where((i) => _isRoutedTo(i, user))
           .toList();
+
+      _backupRequests = mine
+          .where((i) => i.backupRequested)
+          .where((i) => i.assignedTo != null && i.assignedTo != user.uid)
+          // Not already aboard.
+          .where((i) => !i.assignees.any((a) => a['uid'] == user.uid))
+          .toList();
+
       notifyListeners();
     });
   }
@@ -249,16 +287,29 @@ class IncidentProvider extends ChangeNotifier {
   /// is what a client pays a private provider for. Equally, public responders
   /// must never see a private provider's subscriber calls.
   bool _isRoutedTo(IncidentModel incident, UserModel user) {
+    // A crew that has already handed this call on must not be offered it back.
+    if (incident.declinedBy.contains(user.uid)) return false;
+
     if (user.isPrivateResponder) {
+      // Their own provider's call, whether or not the exclusivity window has
+      // since expired — they were the first choice and may still take it.
       return incident.routedTeamId != null &&
           incident.routedTeamId == user.teamId;
     }
+    // Public crews see open calls, including a private one whose provider did
+    // not answer inside the exclusivity window.
     return incident.routingScope != ResponderVisibility.private;
   }
 
-  Future<void> acceptIncident(String incidentId) async {
-    if (_currentUser == null) return;
+  /// Returns true only if this responder now owns the call.
+  ///
+  /// Callers must not navigate to the job screen on false — losing the race is
+  /// normal and common, and pushing a crew into a job somebody else is driving
+  /// to is worse than telling them plainly that they missed it.
+  Future<bool> acceptIncident(String incidentId) async {
+    if (_currentUser == null) return false;
     _setLoading(true);
+    _error = null;
     try {
       await FirestoreService.acceptIncident(
         incidentId: incidentId,
@@ -270,23 +321,122 @@ class IncidentProvider extends ChangeNotifier {
         responderSpecialization: _currentUser!.specialization,
         responderLicenseNumber: _currentUser!.licenseNumber,
         responderVehicleNumber: _currentUser!.vehicleNumber,
+        // Already denormalised onto the profile when an administrator attached
+        // the responder to a care point, so this costs no extra read.
+        responderFacility: _currentUser!.organisation,
       );
       streamActiveIncident(incidentId);
       LocationService.startLiveTracking(_currentUser!.uid,
           incidentId: incidentId);
+      return true;
+    } on StateError catch (e) {
+      // Already taken or already closed — expected, not a fault.
+      _error = e.message;
+      notifyListeners();
+      return false;
     } catch (e) {
       _error = e.toString();
       notifyListeners();
+      return false;
     } finally {
       _setLoading(false);
     }
   }
 
-  Future<void> updateStatus(String status) async {
+  /// Attended, but the job could not be finished. Needs a reason.
+  Future<bool> closeUnresolved(String reason, {IncidentModel? incident}) async {
+    final target = incident ?? _activeIncident;
+    final responderId = _currentUser?.uid;
+    if (target == null || responderId == null) {
+      _error = 'Could not close this job. Try again.';
+      notifyListeners();
+      return false;
+    }
+    try {
+      await FirestoreService.closeUnresolved(
+        incidentId: target.id,
+        responderId: responderId,
+        reason: reason,
+      );
+      LocationService.stopLiveTracking(responderId);
+      _activeIncident = null;
+      notifyListeners();
+      return true;
+    } catch (e) {
+      _error = e.toString();
+      notifyListeners();
+      return false;
+    }
+  }
+
+  /// Hands the call back to the network for a crew better placed to take it.
+  Future<void> rebroadcast(String reason) async {
     if (_activeIncident == null || _currentUser == null) return;
-    await FirestoreService.updateIncidentStatus(_activeIncident!.id, status);
-    // Immediately reflect locally so the stepper updates without waiting for stream
-    _activeIncident = _activeIncident!.copyWith(status: status);
+    await FirestoreService.rebroadcast(
+      incidentId: _activeIncident!.id,
+      responderId: _currentUser!.uid,
+      reason: reason,
+    );
+    LocationService.stopLiveTracking(_currentUser!.uid);
+    _activeIncident = null;
+    notifyListeners();
+  }
+
+  /// Calls off a referral in progress.
+  Future<void> cancelReferral(String carePointName, String reason) async {
+    if (_activeIncident == null) return;
+    await FirestoreService.cancelReferral(
+      incidentId: _activeIncident!.id,
+      carePointName: carePointName,
+      reason: reason,
+    );
+  }
+
+  /// Stands down a backup request.
+  Future<void> cancelBackupRequest() async {
+    if (_activeIncident == null) return;
+    await FirestoreService.cancelBackupRequest(_activeIncident!.id);
+  }
+
+  /// Joins a job somebody else is already running, as backup.
+  Future<bool> joinAsBackup(String incidentId) async {
+    if (_currentUser == null) return false;
+    try {
+      await FirestoreService.joinAsBackup(
+        incidentId: incidentId,
+        responderId: _currentUser!.uid,
+        responderName: _currentUser!.name,
+        responderRole: _currentUser!.role,
+        responderFacility: _currentUser!.organisation,
+        responderVehicle: _currentUser!.vehicleNumber,
+      );
+      streamActiveIncident(incidentId);
+      LocationService.startLiveTracking(_currentUser!.uid,
+          incidentId: incidentId);
+      return true;
+    } catch (e) {
+      _error = e.toString();
+      notifyListeners();
+      return false;
+    }
+  }
+
+  /// Asks for a second crew while staying on the job.
+  Future<void> requestBackup(String reason) async {
+    if (_activeIncident == null) return;
+    await FirestoreService.requestBackup(
+      incidentId: _activeIncident!.id,
+      reason: reason,
+    );
+  }
+
+  Future<void> updateStatus(String status, {IncidentModel? incident}) async {
+    final target = incident ?? _activeIncident;
+    if (target == null || _currentUser == null) return;
+    await FirestoreService.updateIncidentStatus(target.id, status);
+    // Immediately reflect locally so the stepper updates without waiting for
+    // the stream to come back.
+    _activeIncident = target.copyWith(status: status);
     notifyListeners();
   }
 
@@ -305,18 +455,43 @@ class IncidentProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> resolveIncident() async {
-    if (_activeIncident == null || _currentUser == null) return;
-    LocationService.stopLiveTracking(_currentUser!.uid);
-    await FirestoreService.closeIncidentForResponder(
-      responderId: _currentUser!.uid,
-      incidentId: _activeIncident!.id,
-      status: IncidentStatus.resolved,
-      userId: _activeIncident!.userId, // clears patient's currentIncidentId
-    );
-    _activeIncidentSub?.cancel();
-    _activeIncident = null;
-    notifyListeners();
+  /// Closes a job as resolved.
+  ///
+  /// Takes the incident the caller is actually looking at. This used to read
+  /// [_activeIncident] alone and `return` when it was null — so on any screen
+  /// whose incident came from its own stream (a resumed job, a crew who joined
+  /// as backup, a user document whose `currentIncidentId` had been cleared)
+  /// the button wrote nothing at all, the screen went home as though it had
+  /// worked, and the job stayed open and kept appearing as incoming.
+  ///
+  /// Returns false when it could not write, so the caller can say so instead
+  /// of navigating away on a lie.
+  Future<bool> resolveIncident({IncidentModel? incident}) async {
+    final target = incident ?? _activeIncident;
+    final responderId = _currentUser?.uid;
+    if (target == null || responderId == null) {
+      _error = 'Could not close this job. Try again.';
+      notifyListeners();
+      return false;
+    }
+
+    try {
+      LocationService.stopLiveTracking(responderId);
+      await FirestoreService.closeIncidentForResponder(
+        responderId: responderId,
+        incidentId: target.id,
+        status: IncidentStatus.resolved,
+        userId: target.userId, // clears patient's currentIncidentId
+      );
+      _activeIncidentSub?.cancel();
+      _activeIncident = null;
+      notifyListeners();
+      return true;
+    } catch (e) {
+      _error = e.toString();
+      notifyListeners();
+      return false;
+    }
   }
 
   void clearActiveIncident() {

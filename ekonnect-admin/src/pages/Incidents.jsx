@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useIncidents } from '../hooks/useIncidents'
-import { INCIDENT_META, STATUS_META, formatDate, timeAgo } from '../utils/formatters'
+import { INCIDENT_META, STATUS_META, CLOSED_STATUSES, formatDate, timeAgo } from '../utils/formatters'
 import { IconSearch } from '../components/Icons'
 import IncidentJourney from '../components/IncidentJourney'
 
@@ -27,7 +27,6 @@ export default function Incidents() {
       {/* Header */}
       <div className="page-header">
         <div>
-          <h1 className="page-title">Incidents</h1>
           <p className="page-subtitle">Monitor and manage all emergency incidents</p>
         </div>
         <div className="flex items-center gap-2 text-sm text-gray-500 bg-white border border-gray-100 rounded-xl px-4 py-2 shadow-sm">
@@ -147,7 +146,7 @@ export default function Incidents() {
                       >
                         Journey
                       </button>
-                      {inc.status !== 'resolved' && inc.status !== 'cancelled' && (
+                      {!CLOSED_STATUSES.includes(inc.status) && (
                         <button
                           onClick={() => updateStatus(inc.id, 'resolved')}
                           className="text-xs font-semibold text-emerald-600 hover:text-emerald-800 bg-emerald-50 hover:bg-emerald-100 px-2.5 py-1 rounded-lg transition-colors"
@@ -222,7 +221,7 @@ export default function Incidents() {
                   >
                     Journey
                   </button>
-                  {inc.status !== 'resolved' && inc.status !== 'cancelled' && (
+                  {!CLOSED_STATUSES.includes(inc.status) && (
                     <button
                       onClick={() => updateStatus(inc.id, 'resolved')}
                       className="text-xs font-semibold text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-lg"

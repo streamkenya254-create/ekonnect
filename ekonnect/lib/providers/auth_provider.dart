@@ -24,7 +24,6 @@ class AuthProvider extends ChangeNotifier {
   bool get hasFirebaseUser => AuthService.currentUser != null;
   bool get authFlowActive => _authFlowActive;
   bool get hasAcceptedTerms => _user?.termsAccepted ?? false;
-  bool get hasCompletedProfile => _user?.profileComplete ?? false;
 
   AuthProvider() {
     _init();
@@ -78,7 +77,7 @@ class AuthProvider extends ChangeNotifier {
           phone: firebaseUser.phoneNumber ?? '',
           role: 'user',
           fcmToken: token,
-          profileComplete: false,
+          profileComplete: true,
           termsAccepted: false,
         ));
       } else {
@@ -117,7 +116,7 @@ class AuthProvider extends ChangeNotifier {
           phone: '',
           role: 'user',
           fcmToken: token,
-          profileComplete: false,
+          profileComplete: true,
           termsAccepted: false,
         ));
       }
@@ -146,7 +145,7 @@ class AuthProvider extends ChangeNotifier {
         phone: '',
         role: 'user',
         fcmToken: token,
-        profileComplete: false,
+        profileComplete: true,
         termsAccepted: false,
       ));
     } catch (e) {
@@ -239,7 +238,7 @@ class AuthProvider extends ChangeNotifier {
               phone: firebaseUser.phoneNumber ?? phoneNumber,
               role: 'user',
               fcmToken: token,
-              profileComplete: false,
+              profileComplete: true,
               termsAccepted: false,
             ));
           }
@@ -271,7 +270,7 @@ class AuthProvider extends ChangeNotifier {
           phone: firebaseUser.phoneNumber ?? '',
           role: 'user',
           fcmToken: token,
-          profileComplete: false,
+          profileComplete: true,
           termsAccepted: false,
         ));
       }
@@ -323,6 +322,10 @@ class AuthProvider extends ChangeNotifier {
   Future<void> signOut() async {
     if (_user != null) {
       await FirestoreService.setOnlineStatus(_user!.uid, isOnline: false);
+      // Stop pushes to this device, and stop the server addressing a token
+      // that no longer belongs to this person.
+      await FirestoreService.updateUser(_user!.uid, {'fcmToken': null});
+      await FCMService.clearToken();
     }
     await AuthService.signOut();
     _user = null;

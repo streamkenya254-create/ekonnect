@@ -193,7 +193,7 @@ class _VoiceReportSheetState extends State<VoiceReportSheet>
         const SizedBox(height: 6),
         Text(subtitle,
             style: const TextStyle(
-                fontSize: 13, color: AppColors.textMedium, height: 1.35)),
+                fontSize: 14, color: AppColors.textMedium, height: 1.35)),
       ],
     );
   }
@@ -295,7 +295,7 @@ class _VoiceReportSheetState extends State<VoiceReportSheet>
       child: Text(
         _transcript.isEmpty ? 'Waiting for you to speak…' : _transcript,
         style: TextStyle(
-          fontSize: 14.5,
+          fontSize: 15,
           height: 1.4,
           color: _transcript.isEmpty
               ? AppColors.textMedium
@@ -347,7 +347,7 @@ class _VoiceReportSheetState extends State<VoiceReportSheet>
                 padding: const EdgeInsets.only(bottom: 3),
                 child: Text('• $fact',
                     style: const TextStyle(
-                        fontSize: 13, color: AppColors.textMedium)),
+                        fontSize: 14, color: AppColors.textMedium)),
               ),
           ],
           if (a.advice.isNotEmpty) ...[
@@ -367,7 +367,7 @@ class _VoiceReportSheetState extends State<VoiceReportSheet>
                   Expanded(
                     child: Text(a.advice,
                         style: const TextStyle(
-                            fontSize: 12.5,
+                            fontSize: 13,
                             height: 1.35,
                             color: AppColors.textDark)),
                   ),
@@ -383,7 +383,7 @@ class _VoiceReportSheetState extends State<VoiceReportSheet>
               'We are not fully sure from the description. Please confirm the '
               'type below.',
               style: TextStyle(
-                  fontSize: 11.5,
+                  fontSize: 12.5,
                   color: AppColors.textMedium.withValues(alpha: 0.95)),
             ),
           ],
@@ -406,7 +406,7 @@ class _VoiceReportSheetState extends State<VoiceReportSheet>
       ),
       child: Text(label,
           style: TextStyle(
-              fontSize: 10, fontWeight: FontWeight.bold, color: color)),
+              fontSize: 11.5, fontWeight: FontWeight.bold, color: color)),
     );
   }
 
@@ -455,7 +455,7 @@ class _VoiceReportSheetState extends State<VoiceReportSheet>
             child: OutlinedButton.icon(
               icon: Icon(IncidentType.icon(t), size: 18),
               label: Text(IncidentType.label(t),
-                  style: const TextStyle(fontSize: 12.5)),
+                  style: const TextStyle(fontSize: 13)),
               style: OutlinedButton.styleFrom(
                 foregroundColor: IncidentType.color(t),
                 side: BorderSide(
@@ -487,7 +487,7 @@ class _VoiceReportSheetState extends State<VoiceReportSheet>
       'If this is immediately life-threatening, call 999 as well as sending an SOS.',
       textAlign: TextAlign.center,
       style: TextStyle(
-          fontSize: 11.5, color: AppColors.textMedium.withValues(alpha: 0.9)),
+          fontSize: 12.5, color: AppColors.textMedium.withValues(alpha: 0.9)),
     );
   }
 }
@@ -544,7 +544,7 @@ class ProfilePromptCard extends StatelessWidget {
                   ),
                   Text('$pct%',
                       style: const TextStyle(
-                          fontSize: 11,
+                          fontSize: 12.5,
                           fontWeight: FontWeight.bold,
                           color: AppColors.accent)),
                 ],
@@ -569,7 +569,7 @@ class ProfilePromptCard extends StatelessWidget {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
-                        fontSize: 12, color: AppColors.textMedium),
+                        fontSize: 13, color: AppColors.textMedium),
                   ),
                 ],
               ),
@@ -611,7 +611,7 @@ class VoiceReportButton extends StatelessWidget {
               child: Text(
                 'Not sure? Describe it out loud',
                 style: TextStyle(
-                  fontSize: 13,
+                  fontSize: 14,
                   fontWeight: FontWeight.w600,
                   color: AppColors.textDark,
                 ),

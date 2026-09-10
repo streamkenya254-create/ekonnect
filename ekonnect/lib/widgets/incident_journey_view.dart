@@ -38,7 +38,7 @@ class IncidentJourneyView extends StatelessWidget {
         ],
         if (events.isEmpty)
           const Text('No journey recorded for this incident.',
-              style: TextStyle(fontSize: 13, color: AppColors.textMedium))
+              style: TextStyle(fontSize: 14, color: AppColors.textMedium))
         else
           for (var i = 0; i < events.length; i++)
             _EventRow(
@@ -69,7 +69,7 @@ class IncidentJourneyView extends StatelessWidget {
                     '${timings.declinedCount > 1 ? 's' : ''} could not take '
                     'this patient.',
                     style: const TextStyle(
-                        fontSize: 12.5, color: AppColors.textDark),
+                        fontSize: 13, color: AppColors.textDark),
                   ),
                 ),
               ],
@@ -119,7 +119,7 @@ class IncidentJourneyView extends StatelessWidget {
             const SizedBox(height: 2),
             Text(label,
                 style: const TextStyle(
-                    fontSize: 11, color: AppColors.textMedium)),
+                    fontSize: 12.5, color: AppColors.textMedium)),
           ],
         ),
       );
@@ -194,7 +194,7 @@ class _EventRow extends StatelessWidget {
                       Text(
                         DateFormat('HH:mm').format(event.at),
                         style: const TextStyle(
-                            fontSize: 12.5,
+                            fontSize: 13,
                             fontWeight: FontWeight.w600,
                             color: AppColors.textDark),
                       ),
@@ -206,14 +206,14 @@ class _EventRow extends StatelessWidget {
                       Text(
                         DateFormat('d MMM').format(event.at),
                         style: const TextStyle(
-                            fontSize: 11.5, color: AppColors.textMedium),
+                            fontSize: 12.5, color: AppColors.textMedium),
                       ),
                       if (sincePrevious != null) ...[
                         const SizedBox(width: 8),
                         Text(
                           '+${IncidentTimings.format(sincePrevious)}',
                           style: const TextStyle(
-                              fontSize: 11.5,
+                              fontSize: 12.5,
                               fontWeight: FontWeight.w600,
                               color: AppColors.textLight),
                         ),
@@ -225,7 +225,7 @@ class _EventRow extends StatelessWidget {
                             event.actorName!,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
-                                fontSize: 11.5, color: AppColors.textMedium),
+                                fontSize: 12.5, color: AppColors.textMedium),
                           ),
                         ),
                       ],
@@ -243,7 +243,7 @@ class _EventRow extends StatelessWidget {
                       child: Text(
                         event.note!,
                         style: const TextStyle(
-                            fontSize: 12,
+                            fontSize: 13,
                             height: 1.35,
                             color: AppColors.textDark),
                       ),

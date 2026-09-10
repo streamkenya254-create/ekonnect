@@ -88,7 +88,7 @@ class _ChatScreenState extends State<ChatScreen> {
             Text(_otherName),
             if (_otherPhone.isNotEmpty)
               Text(_otherPhone,
-                  style: const TextStyle(fontSize: 12, color: Colors.white70)),
+                  style: const TextStyle(fontSize: 13, color: Colors.white70)),
           ],
         ),
         actions: [

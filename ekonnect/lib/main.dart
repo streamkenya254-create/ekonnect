@@ -8,14 +8,11 @@ import 'package:flutter_native_splash/flutter_native_splash.dart';
 import 'package:provider/provider.dart';
 
 import 'core/constants.dart';
-import 'core/theme.dart';
+import 'services/fcm_service.dart';
 import 'firebase_options.dart';
 import 'providers/auth_provider.dart';
 import 'providers/incident_provider.dart';
-import 'screens/auth/login_screen.dart';
-import 'screens/auth/profile_setup_screen.dart';
-import 'screens/auth/role_selection_screen.dart';
-import 'screens/auth/terms_screen.dart';
+import 'screens/auth/welcome_screen.dart';
 import 'screens/home/home_shell.dart';
 import 'screens/responder/active_job_screen.dart';
 import 'screens/responder/incident_card_screen.dart';
@@ -24,16 +21,13 @@ import 'screens/shared/profile_screen.dart';
 import 'screens/splash/splash_screen.dart';
 import 'screens/ai/ai_chat_screen.dart';
 import 'screens/user/incident_history_screen.dart';
+import 'screens/shared/notifications_screen.dart';
 import 'screens/user/my_providers_screen.dart';
 import 'screens/user/settings_screen.dart';
 import 'screens/user/sos_waiting_screen.dart';
 import 'screens/user/tutorial_screen.dart';
 
 @pragma('vm:entry-point')
-Future<void> _bgMessageHandler(RemoteMessage message) async {
-  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-}
-
 Future<void> main() async {
   final binding = WidgetsFlutterBinding.ensureInitialized();
   // Hold the native launch screen up through Firebase init and the auth
@@ -41,7 +35,11 @@ Future<void> main() async {
   FlutterNativeSplash.preserve(widgetsBinding: binding);
   SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-  FirebaseMessaging.onBackgroundMessage(_bgMessageHandler);
+  FirebaseMessaging.onBackgroundMessage(fcmBackgroundHandler);
+  // Nothing called this before, so permission was never requested and no
+  // message handler was ever attached: push was dead on arrival. Awaited here
+  // so the channel exists before the first notification can land.
+  await FCMService.initialize();
   runApp(const EKonnectApp());
 }
 
@@ -53,6 +51,14 @@ class EKonnectApp extends StatefulWidget {
 
 class _EKonnectAppState extends State<EKonnectApp> {
   final _navigatorKey = GlobalKey<NavigatorState>();
+
+  @override
+  void initState() {
+    super.initState();
+    // A tapped notification navigates through this key, so FCM needs it
+    // before any message can arrive.
+    FCMService.navigatorKey = _navigatorKey;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -76,10 +82,7 @@ class _EKonnectAppState extends State<EKonnectApp> {
         ),
         routes: {
           AppRoutes.splash: (_) => const SplashScreen(),
-          AppRoutes.terms: (_) => const TermsScreen(),
-          AppRoutes.login: (_) => const LoginScreen(),
-          AppRoutes.roleSelect: (_) => const RoleSelectionScreen(),
-          AppRoutes.profileSetup: (_) => const ProfileSetupScreen(),
+          AppRoutes.login: (_) => const WelcomeScreen(),
           AppRoutes.userHome: (_) => const HomeShell(),
           AppRoutes.incidentHistory: (_) => const IncidentHistoryScreen(),
           AppRoutes.responderHome: (_) => const HomeShell(),
@@ -89,14 +92,10 @@ class _EKonnectAppState extends State<EKonnectApp> {
           AppRoutes.tutorial: (_) => const TutorialScreen(),
           AppRoutes.aiChat: (_) => const AiChatScreen(),
           AppRoutes.myProviders: (_) => const MyProvidersScreen(),
+          AppRoutes.notifications: (_) => const NotificationsScreen(),
         },
         onGenerateRoute: (settings) {
           switch (settings.name) {
-            case AppRoutes.phoneAuth:
-              return MaterialPageRoute(
-                builder: (_) => const LoginScreen(),
-                settings: settings,
-              );
             case AppRoutes.sosWaiting:
               final args = settings.arguments as Map<String, dynamic>;
               return MaterialPageRoute(
@@ -151,10 +150,6 @@ class _AuthGuardState extends State<_AuthGuard> {
   /// of these is pointless, and actively harmful on the login screen itself.
   static const _authRoutes = {
     AppRoutes.login,
-    AppRoutes.phoneAuth,
-    AppRoutes.terms,
-    AppRoutes.roleSelect,
-    AppRoutes.profileSetup,
     AppRoutes.splash,
   };
 

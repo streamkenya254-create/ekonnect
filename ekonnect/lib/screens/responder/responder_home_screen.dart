@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:provider/provider.dart';
@@ -16,6 +15,7 @@ import '../../services/location_service.dart';
 import '../../services/marker_helper.dart';
 import '../../widgets/app_drawer.dart';
 import '../../widgets/incident_card_widget.dart';
+import '../../widgets/user_avatar.dart';
 
 class ResponderHomeScreen extends StatefulWidget {
   const ResponderHomeScreen({super.key});
@@ -35,6 +35,15 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
   // corner radius adapt as it covers the map — same behaviour as the user home.
   final ValueNotifier<double> _sheetExtent = ValueNotifier<double>(0.55);
 
+  /// Whether this launch has already restored a job in progress.
+  ///
+  /// Reopening the app mid-job should land the crew back on that job. Pressing
+  /// Home *from* that job should not — and because this screen re-ran the same
+  /// restore on every build of itself, the Home button appeared dead: it
+  /// returned here and was immediately pushed back. Static, so it survives
+  /// this screen being rebuilt but not the process.
+  static bool _restoredActiveJob = false;
+
   @override
   void initState() {
     super.initState();
@@ -42,8 +51,14 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
       final user = context.read<AuthProvider>().user;
       setState(() => _isAvailable = user?.isAvailable ?? false);
 
+      // Mark the visit before deciding, not after: a crew who launches with
+      // no job, accepts one, then presses Home must not be pushed back into
+      // it either. Only the very first appearance of this screen restores.
+      final firstVisit = !_restoredActiveJob;
+      _restoredActiveJob = true;
+
       final active = context.read<IncidentProvider>().activeIncident;
-      if (active != null && active.isActive) {
+      if (firstVisit && active != null && active.isActive) {
         Navigator.pushNamed(context, AppRoutes.activeJob, arguments: active.id);
         return;
       }
@@ -70,6 +85,25 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
   void dispose() {
     _sheetExtent.dispose();
     super.dispose();
+  }
+
+  /// Who this responder answers for, in one word or one name.
+  ///
+  /// Three cases, and the crew should be able to tell them apart at a glance:
+  /// they work for a facility, they are on the open network, or they answer
+  /// only their own clients. The name wins when there is one — 'Oasis
+  /// Specialist Hospital' says more than 'Private' ever could.
+  static String _scopeOf(UserModel? user) {
+    final org = (user?.organisation ?? '').trim();
+    if (org.isNotEmpty) return org;
+    switch (user?.visibility) {
+      case ResponderVisibility.private:
+        return 'Private';
+      case ResponderVisibility.clients:
+        return 'Named clients';
+      default:
+        return 'Independent · Public network';
+    }
   }
 
   Future<void> _toggleAvailability(bool val) async {
@@ -150,7 +184,7 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
                 child: Text(
                   user.verificationNote!,
                   style: const TextStyle(
-                      fontSize: 13, height: 1.4, color: AppColors.textDark),
+                      fontSize: 14, height: 1.4, color: AppColors.textDark),
                 ),
               ),
             ],
@@ -163,7 +197,7 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
                   const SizedBox(width: 8),
                   Text(user.organisation!,
                       style: const TextStyle(
-                          fontSize: 13, color: AppColors.textMedium)),
+                          fontSize: 14, color: AppColors.textMedium)),
                 ],
               ),
             ],
@@ -192,8 +226,18 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
   Future<void> _accept(IncidentModel incident) async {
     final provider = context.read<IncidentProvider>();
     final nav = Navigator.of(context);
-    await provider.acceptIncident(incident.id);
+    final messenger = ScaffoldMessenger.of(context);
+
+    final won = await provider.acceptIncident(incident.id);
     if (!mounted) return;
+
+    if (!won) {
+      messenger.showSnackBar(SnackBar(
+        content: Text(provider.error ?? 'Could not take this call.'),
+        backgroundColor: AppColors.textDark,
+      ));
+      return;
+    }
     nav.pushNamed(AppRoutes.activeJob, arguments: incident.id);
   }
 
@@ -206,15 +250,12 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
 
     final isAmbulance = user?.role == AppRoles.ambulance;
     final roleLabel = isAmbulance ? 'Ambulance' : 'Practitioner';
-    final roleIcon =
-        isAmbulance ? Icons.local_shipping_rounded : Icons.medical_services_rounded;
-    final roleAsset = AppAssets.forRole(user?.role ?? AppRoles.ambulance);
     final firstName = user?.name.split(' ').first ?? 'Responder';
 
     return Scaffold(
       key: _scaffoldKey,
       backgroundColor: AppColors.primaryDark,
-      drawer: _buildDrawer(user?.name ?? 'Responder', roleLabel, roleIcon),
+      drawer: _buildDrawer(user?.name ?? 'Responder', roleLabel),
       body: Stack(
         children: [
           // Background: full-screen live map of incoming incidents.
@@ -242,6 +283,7 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
                   valueListenable: _sheetExtent,
                   builder: (context, extent, _) {
                     final full = ((extent - 0.9) / 0.1).clamp(0.0, 1.0);
+                    final peek = extent < 0.28;
                     final radius = 30.0 * (1 - full);
                     final topInset = 12 + full * (topPad + 10);
                     return Container(
@@ -258,7 +300,7 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
                       ),
                       child: ListView(
                         controller: scrollController,
-                        padding: EdgeInsets.fromLTRB(20, topInset, 20, 32),
+                        padding: EdgeInsets.fromLTRB(20, topInset, 20, peek ? 12 : 32),
                         children: [
                           // Drag handle — fades as the sheet becomes a full page.
                           Center(
@@ -279,16 +321,19 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
                           // Identity — big role illustration + greeting.
                           Row(
                             children: [
-                              Container(
-                                width: 58,
-                                height: 58,
-                                decoration: BoxDecoration(
-                                  color: AppColors.surfaceAlt,
-                                  borderRadius: BorderRadius.circular(18),
+                              // The one place the responder's own face
+                              // belongs: beside their name, not floating over
+                              // the map where it competed with the duty pill.
+                              GestureDetector(
+                                onTap: () => Navigator.pushNamed(
+                                    context, AppRoutes.profile),
+                                child: UserAvatar(
+                                  user: user,
+                                  size: 58,
+                                  cornerRadius: 18,
+                                  background: AppColors.surfaceAlt,
+                                  foreground: AppColors.textDark,
                                 ),
-                                padding: const EdgeInsets.all(9),
-                                child: SvgPicture.asset(roleAsset,
-                                    fit: BoxFit.contain),
                               ),
                               const SizedBox(width: 14),
                               Expanded(
@@ -301,34 +346,57 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
                                             fontWeight: FontWeight.bold,
                                             color: AppColors.textDark)),
                                     const SizedBox(height: 2),
-                                    Text('$roleLabel · Responder mode',
+                                    Text('$roleLabel · ${_scopeOf(user)}',
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
                                         style: const TextStyle(
-                                            fontSize: 13,
+                                            fontSize: 14,
                                             color: AppColors.textMedium)),
                                   ],
                                 ),
                               ),
                             ],
                           ),
-                          const SizedBox(height: 18),
+                          // Below this height the sheet cannot show the rest without
+                          // cutting it in half, so it shows none of it. The greeting
+                          // above stays, which is all a peek needs to identify itself.
+                          if (!peek) ...[
+                            const SizedBox(height: 18),
 
-                          // Duty toggle.
-                          _dutyToggle(),
-                          const SizedBox(height: 22),
+                            // The job in progress, if there is one. Leaving it
+                            // to check the map is normal; losing the way back
+                            // to it is not.
+                            Builder(builder: (ctx) {
+                              final active =
+                                  ctx.watch<IncidentProvider>().activeIncident;
+                              if (active == null || !active.isActive) {
+                                return const SizedBox.shrink();
+                              }
+                              return Padding(
+                                padding: const EdgeInsets.only(bottom: 18),
+                                child: _ActiveJobCard(incident: active),
+                              );
+                            }),
 
-                          // Statistics.
-                          const Text('Overview',
-                              style: TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w700,
-                                  color: AppColors.textMedium,
-                                  letterSpacing: 0.3)),
-                          const SizedBox(height: 12),
-                          _statsRow(incidents.length),
-                          const SizedBox(height: 22),
+                            // Duty toggle.
+                            _dutyToggle(),
 
-                          // Incoming incidents / status.
-                          _incidentsSection(incidents),
+                            const SizedBox(height: 22),
+
+                            // Statistics.
+                            const Text('Overview',
+                                style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w700,
+                                    color: AppColors.textMedium,
+                                    letterSpacing: 0.3)),
+                            const SizedBox(height: 12),
+                            _statsRow(incidents.length),
+                            const SizedBox(height: 22),
+
+                            // Incoming incidents / status.
+                            _incidentsSection(incidents),
+                          ],
                         ],
                       ),
                     );
@@ -353,12 +421,40 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
               icon: Icons.menu_rounded,
               onTap: () => _scaffoldKey.currentState?.openDrawer(),
             ),
-            const Spacer(),
-            _dutyPill(),
-            const Spacer(),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Container(
+                height: 52,
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.95),
+                  borderRadius: BorderRadius.circular(26),
+                  boxShadow: [
+                    BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.08),
+                        blurRadius: 15,
+                        offset: const Offset(0, 4)),
+                  ],
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Image.asset(AppAssets.logoPurple,
+                        width: 30, height: 30, fit: BoxFit.contain),
+                    const SizedBox(width: 10),
+                    const Text('eKonnect',
+                        style: TextStyle(
+                            color: AppColors.textDark,
+                            fontWeight: FontWeight.w800,
+                            fontSize: 16,
+                            letterSpacing: -0.3)),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
             _circleBtn(
-              icon: Icons.person_outline_rounded,
-              onTap: () => Navigator.pushNamed(context, AppRoutes.profile),
+              icon: Icons.settings_rounded,
+              onTap: () => Navigator.pushNamed(context, AppRoutes.settings),
             ),
           ],
         ),
@@ -366,7 +462,9 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
     );
   }
 
-  Widget _circleBtn({required IconData icon, required VoidCallback onTap}) {
+  /// Either an icon or, for the profile button, the user's own face.
+  Widget _circleBtn(
+      {IconData? icon, Widget? child, required VoidCallback onTap}) {
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -382,51 +480,14 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
                 offset: const Offset(0, 2)),
           ],
         ),
-        child: Icon(icon, color: AppColors.textDark, size: 22),
+        child: child == null
+            ? Icon(icon, color: AppColors.textDark, size: 22)
+            : Center(child: child),
       ),
     );
   }
 
   // Duty status pill in the top bar — tap to go on / off duty.
-  Widget _dutyPill() {
-    return GestureDetector(
-      onTap: () => _toggleAvailability(!_isAvailable),
-      child: Container(
-        height: 44,
-        padding: const EdgeInsets.symmetric(horizontal: 18),
-        decoration: BoxDecoration(
-          color: _isAvailable ? AppColors.accent : AppColors.textDark,
-          borderRadius: BorderRadius.circular(22),
-          boxShadow: [
-            BoxShadow(
-                color: (_isAvailable ? AppColors.accent : Colors.black)
-                    .withValues(alpha: 0.3),
-                blurRadius: 10,
-                offset: const Offset(0, 2)),
-          ],
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 9,
-              height: 9,
-              decoration: const BoxDecoration(
-                  color: Colors.white, shape: BoxShape.circle),
-            ),
-            const SizedBox(width: 8),
-            Text(_isAvailable ? 'On Duty' : 'Off Duty',
-                style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 14)),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // ── Live map with incoming-incident pins + a floating stat badge ───────────
   Widget _mapLayer(List<IncidentModel> incidents) {
     return Stack(
       children: [
@@ -462,48 +523,6 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
           },
         ),
 
-        // Floating badge below the top bar — live incoming count.
-        Positioned(
-          top: 72,
-          left: 16,
-          child: SafeArea(
-            bottom: false,
-            child: Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-              decoration: BoxDecoration(
-                color: incidents.isEmpty ? AppColors.textDark : AppColors.accent,
-                borderRadius: BorderRadius.circular(20),
-                boxShadow: [
-                  BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.25),
-                      blurRadius: 8),
-                ],
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                      incidents.isEmpty
-                          ? Icons.check_circle_rounded
-                          : Icons.warning_amber_rounded,
-                      color: Colors.white,
-                      size: 14),
-                  const SizedBox(width: 5),
-                  Text(
-                    incidents.isEmpty
-                        ? 'No incidents nearby'
-                        : '${incidents.length} incoming near you',
-                    style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
       ],
     );
   }
@@ -573,7 +592,9 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
       );
     }
 
-    if (incidents.isEmpty) {
+    final backups = context.watch<IncidentProvider>().backupRequests;
+
+    if (incidents.isEmpty && backups.isEmpty) {
       return const _StatusBlock(
         title: 'All clear nearby',
         message:
@@ -582,9 +603,17 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
       );
     }
 
+    if (incidents.isEmpty) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [for (final b in backups) _BackupCard(incident: b)],
+      );
+    }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        for (final b in backups) _BackupCard(incident: b),
         Row(
           children: [
             const Text('Incoming incidents',
@@ -604,7 +633,7 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
                   style: const TextStyle(
                       color: AppColors.accent,
                       fontWeight: FontWeight.bold,
-                      fontSize: 13)),
+                      fontSize: 14)),
             ),
           ],
         ),
@@ -654,7 +683,7 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
                   color:
                       _isAvailable ? AppColors.textDark : AppColors.textMedium,
                   fontWeight: FontWeight.w600,
-                  fontSize: 13.5,
+                  fontSize: 14,
                 ),
               ),
             ),
@@ -673,34 +702,31 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
     );
   }
 
-  Widget _buildDrawer(String name, String roleLabel, IconData roleIcon) {
+  Widget _buildDrawer(String name, String roleLabel) {
     return AppDrawer(
       name: name,
+      user: context.watch<AuthProvider>().user,
       subtitle: roleLabel,
-      subtitleIcon: roleIcon,
       statusText: _isAvailable ? 'On Duty' : 'Off Duty',
       statusActive: _isAvailable,
+      // "Dashboard" is the screen behind the drawer and Profile is the avatar
+      // in the top bar, so neither is repeated here. Everything below has no
+      // other way in from this screen.
       children: [
         DrawerTile(
-          icon: Icons.dashboard_rounded,
-          label: 'Dashboard',
-          onTap: () => Navigator.pop(context),
-        ),
-        DrawerTile(
           icon: Icons.history_rounded,
-          label: 'History',
+          label: 'Jobs history',
           onTap: () {
             Navigator.pop(context);
             Navigator.pushNamed(context, AppRoutes.incidentHistory);
           },
         ),
-        const DrawerSection('Account'),
         DrawerTile(
-          icon: Icons.person_rounded,
-          label: 'Profile',
+          icon: Icons.notifications_none_rounded,
+          label: 'Notifications',
           onTap: () {
             Navigator.pop(context);
-            Navigator.pushNamed(context, AppRoutes.profile);
+            Navigator.pushNamed(context, AppRoutes.notifications);
           },
         ),
         DrawerTile(
@@ -720,8 +746,8 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
           },
         ),
         DrawerTile(
-          icon: Icons.emergency_rounded,
-          label: 'User',
+          icon: Icons.swap_horiz_rounded,
+          label: 'Emergency user',
           onTap: () async {
             Navigator.pop(context);
             await context.read<AuthProvider>().switchMode(AppRoles.user);
@@ -752,6 +778,89 @@ class _ResponderHomeScreenState extends State<ResponderHomeScreen> {
           },
         ),
       ],
+    );
+  }
+}
+
+/// A job already under way, and the way back into it.
+class _ActiveJobCard extends StatelessWidget {
+  final IncidentModel incident;
+  const _ActiveJobCard({required this.incident});
+
+  @override
+  Widget build(BuildContext context) {
+    final colour = IncidentType.color(incident.type);
+    return Material(
+      color: colour,
+      borderRadius: BorderRadius.circular(AppRadius.card),
+      child: InkWell(
+        onTap: () => Navigator.pushNamed(context, AppRoutes.activeJob,
+            arguments: incident.id),
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(13),
+                ),
+                child: Icon(IncidentType.icon(incident.type),
+                    color: Colors.white, size: 22),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Job in progress',
+                        style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.85),
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 3),
+                    Text(
+                      incident.userName.isEmpty
+                          ? IncidentType.label(incident.type)
+                          : incident.userName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(IncidentStatus.label(incident.status),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.8),
+                            fontSize: 13)),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 14, vertical: 9),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(AppRadius.chip),
+                ),
+                child: Text('Resume',
+                    style: TextStyle(
+                        color: colour,
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold)),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -791,7 +900,7 @@ class _StatTile extends StatelessWidget {
           const SizedBox(height: 2),
           Text(label,
               style: const TextStyle(
-                  fontSize: 12, color: AppColors.textMedium)),
+                  fontSize: 13, color: AppColors.textMedium)),
         ],
       ),
     );
@@ -841,12 +950,115 @@ class _StatusBlock extends StatelessWidget {
             message,
             textAlign: TextAlign.center,
             style: const TextStyle(
-                color: AppColors.textMedium, fontSize: 13, height: 1.5),
+                color: AppColors.textMedium, fontSize: 14, height: 1.5),
           ),
           if (action != null) ...[
             const SizedBox(height: 22),
             action!,
           ],
+        ],
+      ),
+    );
+  }
+}
+
+
+/// A crew already on scene needs a second pair of hands.
+///
+/// Visually distinct from an incoming incident: somebody is already there, so
+/// this is not a race and answering it late is not a failure. Showing it as a
+/// normal SOS card would make every backup request look like an emergency
+/// nobody had answered.
+class _BackupCard extends StatefulWidget {
+  final IncidentModel incident;
+  const _BackupCard({required this.incident});
+
+  @override
+  State<_BackupCard> createState() => _BackupCardState();
+}
+
+class _BackupCardState extends State<_BackupCard> {
+  bool _joining = false;
+
+  Future<void> _join() async {
+    setState(() => _joining = true);
+    final provider = context.read<IncidentProvider>();
+    final nav = Navigator.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+
+    final joined = await provider.joinAsBackup(widget.incident.id);
+    if (!mounted) return;
+
+    if (!joined) {
+      setState(() => _joining = false);
+      messenger.showSnackBar(SnackBar(
+        content: Text(provider.error ?? 'Could not join that job.'),
+      ));
+      return;
+    }
+    nav.pushNamed(AppRoutes.activeJob, arguments: widget.incident.id);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final i = widget.incident;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.primary.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.primary.withValues(alpha: 0.35)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.group_add_rounded,
+                  color: AppColors.primary, size: 20),
+              const SizedBox(width: 8),
+              const Text('Backup needed',
+                  style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                      color: AppColors.primary)),
+              const Spacer(),
+              Text(IncidentType.label(i.type),
+                  style: const TextStyle(
+                      fontSize: 12.5, color: AppColors.textLight)),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '${i.assignedToName ?? 'A crew'} is already on scene and has asked '
+            'for a second crew.',
+            style: const TextStyle(fontSize: 14, color: AppColors.textDark),
+          ),
+          if (i.backupReason != null && i.backupReason!.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text('"${i.backupReason}"',
+                style: const TextStyle(
+                    fontSize: 13,
+                    fontStyle: FontStyle.italic,
+                    color: AppColors.textMedium)),
+          ],
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: _joining ? null : _join,
+              icon: const Icon(Icons.add_rounded, size: 18),
+              label: Text(_joining ? 'Joining…' : 'Join as backup'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.white,
+                minimumSize: const Size(double.infinity, 44),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
+              ),
+            ),
+          ),
         ],
       ),
     );

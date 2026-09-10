@@ -3,7 +3,7 @@ import { getAuth } from 'firebase/auth'
 import { getFirestore } from 'firebase/firestore'
 import { getDatabase } from 'firebase/database'
 
-const firebaseConfig = {
+export const firebaseConfig = {
   apiKey: 'AIzaSyDwUvaCqXQo0Pxduziir63SiLIIqvhrxso',
   authDomain: 'ekonnectapp.firebaseapp.com',
   projectId: 'ekonnectapp',

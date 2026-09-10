@@ -221,7 +221,7 @@ class _SlideWidget extends StatelessWidget {
               slide.tip,
               textAlign: TextAlign.center,
               style: TextStyle(
-                  fontSize: 13,
+                  fontSize: 14,
                   color: slide.color,
                   fontWeight: FontWeight.w600),
             ),

@@ -1,0 +1,3 @@
+node_modules/
+# A private key for the whole Firebase project — never commit this.
+service-account.json

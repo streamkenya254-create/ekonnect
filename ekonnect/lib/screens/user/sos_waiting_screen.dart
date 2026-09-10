@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
@@ -7,12 +9,14 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/constants.dart';
 import '../../models/incident_model.dart';
+import '../../providers/auth_provider.dart';
 import '../../providers/incident_provider.dart';
 import '../../services/firestore_service.dart';
 import '../../services/location_service.dart';
 import '../../services/marker_helper.dart';
 import '../../services/routes_service.dart';
 import 'cancel_reason_sheet.dart';
+import 'responder_profile_screen.dart';
 
 class SOSWaitingScreen extends StatefulWidget {
   final String incidentType;
@@ -37,7 +41,6 @@ class _SOSWaitingScreenState extends State<SOSWaitingScreen>
 
   BitmapDescriptor? _userMarkerIcon;
   BitmapDescriptor? _responderMarkerIcon;
-  double _responderHeading = 0;
   int? _etaMinutes;
 
   // ── Live route from responder → user (Uber-style tracking) ────────────────
@@ -62,6 +65,11 @@ class _SOSWaitingScreenState extends State<SOSWaitingScreen>
   // Fires after 10 min if still waiting for a responder.
   Timer? _broadcastTimer;
 
+  /// Opens a private-routed call to the public network if the subscriber's own
+  /// provider has not answered in time. Runs on the patient's phone because
+  /// they are the one waiting and their app is the one that is definitely open.
+  Timer? _privateWindowTimer;
+
   // Guards against showing multiple dialogs simultaneously.
   bool _dialogShown = false;
 
@@ -84,7 +92,15 @@ class _SOSWaitingScreenState extends State<SOSWaitingScreen>
     final incident = provider.activeIncident;
     final userName = incident?.userName ?? '';
     final initials = _initials(userName);
-    _userMarkerIcon = await MarkerHelper.userPin(initials);
+    // The patient's own face, so the map shows who is where rather than
+    // two anonymous glyphs.
+    final me = context.read<AuthProvider>().user;
+    _userMarkerIcon = await MarkerHelper.photoPin(
+      cacheKey: 'me_${me?.uid ?? ''}_${(me?.profilePhoto ?? '').length}',
+      ringColor: AppColors.primary,
+      photo: _photoBytes(me?.profilePhoto),
+      initials: initials,
+    );
 
     if (mounted && incident != null) {
       _setUserMarker(
@@ -97,6 +113,22 @@ class _SOSWaitingScreenState extends State<SOSWaitingScreen>
         if (mounted && !_dialogShown) _showTimeoutDialog();
       });
     }
+
+    // Private exclusivity: their provider gets first refusal, then everyone.
+    if (incident != null &&
+        incident.isPending &&
+        incident.routingScope == ResponderVisibility.private) {
+      _privateWindowTimer = Timer(FirestoreService.privateExclusivity, () async {
+        final opened =
+            await FirestoreService.openPrivateCallToPublic(widget.incidentId);
+        if (!mounted || !opened) return;
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Still looking — your call has been opened to all '
+              'nearby responders.'),
+          duration: Duration(seconds: 5),
+        ));
+      });
+    }
   }
 
   void _onIncidentUpdate() {
@@ -105,7 +137,8 @@ class _SOSWaitingScreenState extends State<SOSWaitingScreen>
 
     if (incident?.assignedTo != null && _responderSub == null) {
       _pulseCtrl.stop();
-      _broadcastTimer?.cancel(); // responder found — timeout no longer needed
+      _broadcastTimer?.cancel();
+    _privateWindowTimer?.cancel(); // responder found — timeout no longer needed
       _startResponderTracking(incident!);
     }
 
@@ -170,7 +203,6 @@ class _SOSWaitingScreenState extends State<SOSWaitingScreen>
   Future<void> _onResponderPosition(
       LatLng latlng, double heading, IncidentModel incident) async {
     final responderInitials = _initials(incident.assignedToName ?? '');
-    final role = incident.assignedToRole ?? AppRoles.ambulance;
     final dest = LatLng(incident.userLat, incident.userLng);
 
     // Straight-line ETA immediately, so the card is never blank while the road
@@ -185,16 +217,18 @@ class _SOSWaitingScreenState extends State<SOSWaitingScreen>
 
     _maybeFetchRoute(latlng, dest);
 
-    if (heading != _responderHeading || _responderMarkerIcon == null) {
-      _responderHeading = heading;
-      _responderMarkerIcon = await MovingMarkerHelper.ambulanceMoving(
-        role: role,
-        initials: responderInitials,
-        headingDeg: heading,
-      );
+    // Their face, not a vehicle glyph. The heading arrow told the patient
+    // which way the van was pointing, which is not a thing they can act on;
+    // knowing who is coming is.
+    if (incident.assignedTo != null) {
+      await _loadResponderPhoto(incident.assignedTo!);
     }
-    _responderMarkerIcon ??=
-        await MarkerHelper.responderPin(role, responderInitials);
+    _responderMarkerIcon = await MarkerHelper.photoPin(
+      cacheKey: 'crew_${incident.assignedTo ?? ''}_${(_responderPhoto ?? '').length}',
+      ringColor: IncidentType.color(incident.type),
+      photo: _photoBytes(_responderPhoto),
+      initials: responderInitials,
+    );
 
     if (!mounted) return;
     setState(() {
@@ -338,6 +372,7 @@ class _SOSWaitingScreenState extends State<SOSWaitingScreen>
 
     _userCancelled = true;
     _broadcastTimer?.cancel();
+    _privateWindowTimer?.cancel();
     final provider = context.read<IncidentProvider>();
     final nav = Navigator.of(context);
     await provider.cancelActiveIncident(
@@ -530,11 +565,46 @@ class _SOSWaitingScreenState extends State<SOSWaitingScreen>
         .toUpperCase();
   }
 
+  /// The crew's photo, for the pin and the collapsed card. Fetched once per
+  /// assignment: the incident carries their name and number, never a picture.
+  String? _responderPhoto;
+  String? _photoFetchedFor;
+
+  /// How far the status sheet is open, 0..1.
+  ///
+  /// Watching the ambulance approach is the point of this screen, and a fixed
+  /// panel covered most of the map. The sheet is the patient's control over
+  /// that trade: drag down for map, up for detail.
+  final ValueNotifier<double> _sheetExtent = ValueNotifier<double>(0.55);
+
+  Future<void> _loadResponderPhoto(String uid) async {
+    if (_photoFetchedFor == uid) return;
+    _photoFetchedFor = uid;
+    try {
+      final u = await FirestoreService.getUser(uid);
+      if (mounted && (u?.profilePhoto ?? '').isNotEmpty) {
+        setState(() => _responderPhoto = u!.profilePhoto);
+      }
+    } catch (_) {/* initials remain, which is enough */}
+  }
+
+  /// Photos are stored as `data:image/jpeg;base64,…` on the user document.
+  static Uint8List? _photoBytes(String? raw) {
+    if (raw == null || raw.isEmpty) return null;
+    try {
+      return base64Decode(raw.contains(',') ? raw.split(',').last : raw);
+    } catch (_) {
+      return null;
+    }
+  }
+
   @override
   void dispose() {
     context.read<IncidentProvider>().removeListener(_onIncidentUpdate);
     _responderSub?.cancel();
     _broadcastTimer?.cancel();
+    _privateWindowTimer?.cancel();
+    _sheetExtent.dispose();
     _pulseCtrl.dispose();
     super.dispose();
   }
@@ -568,10 +638,10 @@ class _SOSWaitingScreenState extends State<SOSWaitingScreen>
           ),
         ],
       ),
-      body: Column(
+      body: Stack(
         children: [
           // Map
-          Expanded(
+          Positioned.fill(
             child: Stack(
               children: [
                 GoogleMap(
@@ -626,22 +696,89 @@ class _SOSWaitingScreenState extends State<SOSWaitingScreen>
             ),
           ),
 
-          // Status card
-          Container(
-            width: double.infinity,
-            decoration: const BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-              boxShadow: [
-                BoxShadow(
-                    color: Colors.black12,
-                    blurRadius: 12,
-                    offset: Offset(0, -4))
-              ],
-            ),
-            padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
-            child: Column(
-              children: [
+          // ── Status sheet ────────────────────────────────────────────
+          //
+          // Drag it down and it hands the map back, keeping only what
+          // changes: the crew's face, their name, the ETA. Drag it up and
+          // the detail returns. The map underneath is never rebuilt, so the
+          // camera and the route survive every drag.
+          NotificationListener<DraggableScrollableNotification>(
+            onNotification: (n) {
+              _sheetExtent.value = n.extent;
+              return false;
+            },
+            child: DraggableScrollableSheet(
+              initialChildSize: 0.55,
+              minChildSize: 0.16,
+              maxChildSize: 0.92,
+              snap: true,
+              snapSizes: const [0.16, 0.55, 0.92],
+              builder: (context, scrollController) {
+                return ValueListenableBuilder<double>(
+                  valueListenable: _sheetExtent,
+                  builder: (context, extent, _) {
+                    // Three states, not a continuum: a patient watching an
+                    // ambulance should not have to hold the sheet at an exact
+                    // height to read something.
+                    final peek = extent < 0.28;
+                    return Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.vertical(
+                            top: Radius.circular(28 * (1 - ((extent - 0.8) / 0.12).clamp(0.0, 1.0)))),
+                        boxShadow: const [
+                          BoxShadow(
+                              color: Colors.black12,
+                              blurRadius: 20,
+                              offset: Offset(0, -4))
+                        ],
+                      ),
+                      child: ListView(
+                        controller: scrollController,
+                        padding: EdgeInsets.fromLTRB(20, 10, 20, peek ? 10 : 28),
+                        children: [
+                          Center(
+                            child: Container(
+                              width: 44,
+                              height: 5,
+                              margin: const EdgeInsets.only(bottom: 14),
+                              decoration: BoxDecoration(
+                                color: AppColors.divider,
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                            ),
+                          ),
+                          // Waiting has its own peek tier. Without one, the
+                          // full panel was rendered into a 0.16-high sheet and
+                          // clipped mid-word — a broken screen at exactly the
+                          // moment the caller is watching the map.
+                          if (peek && isWaiting)
+                            _PeekWaiting(
+                              color: color,
+                              t: _pulseCtrl,
+                              onCall999: () async {
+                                final uri = Uri(scheme: 'tel', path: '999');
+                                if (await canLaunchUrl(uri)) launchUrl(uri);
+                              },
+                              onCancel: _cancelSOS,
+                            )
+                          else if (peek && incident != null)
+                            _PeekRow(
+                              incident: incident,
+                              color: color,
+                              eta: _etaMinutes,
+                              photo: _responderPhoto,
+                              onOpenProfile: () => Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => ResponderProfileScreen(
+                                      incident: incident),
+                                ),
+                              ),
+                              onCall: () =>
+                                  _callResponder(incident.assignedToPhone ?? ''),
+                            )
+                          else ...[
                 // Status pill
                 Container(
                   padding:
@@ -684,7 +821,19 @@ class _SOSWaitingScreenState extends State<SOSWaitingScreen>
                     const SizedBox(height: 12),
                   ],
                   // Responder card
-                  _ResponderCard(incident: incident, color: color, eta: _etaMinutes),
+                  _ResponderCard(
+                    incident: incident,
+                    color: color,
+                    eta: _etaMinutes,
+                    photo: _responderPhoto,
+                    onOpenProfile: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) =>
+                            ResponderProfileScreen(incident: incident),
+                      ),
+                    ),
+                  ),
                   const SizedBox(height: 12),
                   // Call + Chat
                   Row(
@@ -756,7 +905,13 @@ class _SOSWaitingScreenState extends State<SOSWaitingScreen>
                     child: const Text('Cancel SOS'),
                   ),
                 ],
-              ],
+                          ],
+                        ],
+                      ),
+                    );
+                  },
+                );
+              },
             ),
           ),
         ],
@@ -795,7 +950,7 @@ class _MovingBanner extends StatelessWidget {
           Text(
             '${incident.assignedToName ?? "Responder"} is on the way',
             style: TextStyle(
-                color: color, fontWeight: FontWeight.w600, fontSize: 13),
+                color: color, fontWeight: FontWeight.w600, fontSize: 14),
           ),
           if (eta != null) ...[
             const SizedBox(width: 8),
@@ -810,7 +965,7 @@ class _MovingBanner extends StatelessWidget {
                 '~$eta min',
                 style: const TextStyle(
                     color: Colors.white,
-                    fontSize: 11,
+                    fontSize: 12.5,
                     fontWeight: FontWeight.bold),
               ),
             ),
@@ -834,8 +989,16 @@ class _ResponderCard extends StatelessWidget {
   final IncidentModel incident;
   final Color color;
   final int? eta;
-  const _ResponderCard(
-      {required this.incident, required this.color, this.eta});
+  final String? photo;
+  final VoidCallback onOpenProfile;
+
+  const _ResponderCard({
+    required this.incident,
+    required this.color,
+    required this.onOpenProfile,
+    this.eta,
+    this.photo,
+  });
 
   static IconData _roleIcon(String? role) {
     switch (role) {
@@ -853,6 +1016,7 @@ class _ResponderCard extends StatelessWidget {
     final specialization = incident.assignedToSpecialization;
     final licenseNumber = incident.assignedToLicenseNumber;
     final vehicleNumber = incident.assignedToVehicleNumber;
+    final facility = incident.assignedToFacilityName;
     final phone = incident.assignedToPhone ?? '';
     final roleLabel = role != null
         ? AppRoles.displayLabel(role)
@@ -901,21 +1065,52 @@ class _ResponderCard extends StatelessWidget {
                           color: AppColors.textDark),
                     ),
                     const SizedBox(height: 4),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 3),
-                      decoration: BoxDecoration(
-                        color: color.withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Text(
-                        roleLabel,
-                        style: TextStyle(
-                            color: color,
-                            fontSize: 11,
-                            fontWeight: FontWeight.bold),
-                      ),
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: color.withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              roleLabel,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                  color: color,
+                                  fontSize: 12.5,
+                                  fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
+                    // Who they answer to. "Ben, ambulance driver" is a person;
+                    // "Ben, ambulance driver, Oasis Hospital" is someone
+                    // accountable to an institution — which is the whole point
+                    // of a verified network.
+                    if (facility != null && facility.isNotEmpty) ...[
+                      const SizedBox(height: 5),
+                      Row(
+                        children: [
+                          Icon(Icons.apartment_rounded,
+                              size: 13, color: AppColors.textLight),
+                          const SizedBox(width: 4),
+                          Expanded(
+                            child: Text(
+                              facility,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: AppColors.textLight),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -936,7 +1131,7 @@ class _ResponderCard extends StatelessWidget {
                       const SizedBox(width: 4),
                       const Text('live',
                           style: TextStyle(
-                              fontSize: 9,
+                              fontSize: 11,
                               color: AppColors.success,
                               fontWeight: FontWeight.bold)),
                     ],
@@ -962,14 +1157,14 @@ class _ResponderCard extends StatelessWidget {
                             '~$eta min',
                             style: const TextStyle(
                                 color: Colors.white,
-                                fontSize: 13,
+                                fontSize: 14,
                                 fontWeight: FontWeight.bold),
                           ),
                           const Text(
                             'ETA',
                             style: TextStyle(
                                 color: Colors.white70,
-                                fontSize: 9,
+                                fontSize: 11,
                                 fontWeight: FontWeight.w500),
                           ),
                         ],
@@ -1013,6 +1208,228 @@ class _ResponderCard extends StatelessWidget {
   }
 }
 
+/// The crew's photograph, falling back to their initials.
+class _Face extends StatelessWidget {
+  final String? photo;
+  final String name;
+  final Color color;
+  final double size;
+  const _Face({
+    required this.photo,
+    required this.name,
+    required this.color,
+    this.size = 56,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final bytes = _SOSWaitingScreenState._photoBytes(photo);
+    final initials = name.trim().isEmpty
+        ? '?'
+        : name.trim().split(RegExp(r's+')).take(2)
+            .map((w) => w[0].toUpperCase()).join();
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: color,
+        image: bytes == null
+            ? null
+            : DecorationImage(image: MemoryImage(bytes), fit: BoxFit.cover),
+      ),
+      child: bytes != null
+          ? null
+          : Center(
+              child: Text(initials,
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: size * 0.34)),
+            ),
+    );
+  }
+}
+
+/// The sheet at its smallest: who is coming, how far off, and one tap each
+/// to their profile or their phone. Everything else is a drag away.
+/// The sheet at its smallest while nobody has answered yet.
+///
+/// One line of state and two round actions. Icons alone are enough here: by
+/// the time the sheet is collapsed the caller has already read the labels
+/// full-size, and what they need back is the map, not the wording.
+class _PeekWaiting extends StatelessWidget {
+  final Color color;
+  final Animation<double> t;
+  final VoidCallback onCall999;
+  final VoidCallback onCancel;
+
+  const _PeekWaiting({
+    required this.color,
+    required this.t,
+    required this.onCall999,
+    required this.onCancel,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        // The same pulse the map banner uses, so the two read as one state.
+        AnimatedBuilder(
+          animation: t,
+          builder: (_, _) {
+            final scale = 0.7 + 0.3 * (0.5 + 0.5 * sin(t.value * 2 * pi));
+            return Container(
+              width: 40,
+              height: 40,
+              alignment: Alignment.center,
+              child: Container(
+                width: 16 * scale,
+                height: 16 * scale,
+                decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+              ),
+            );
+          },
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('Waiting for a responder',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppText.cardTitle),
+              const SizedBox(height: 2),
+              const Text('Stay where you are',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppText.meta),
+            ],
+          ),
+        ),
+        const SizedBox(width: 8),
+        _PeekAction(
+          icon: Icons.call_rounded,
+          tooltip: 'Call 999',
+          background: AppColors.accent,
+          foreground: Colors.white,
+          onTap: onCall999,
+        ),
+        const SizedBox(width: 8),
+        _PeekAction(
+          icon: Icons.close_rounded,
+          tooltip: 'Cancel SOS',
+          background: AppColors.surfaceAlt,
+          foreground: AppColors.textMedium,
+          onTap: onCancel,
+        ),
+      ],
+    );
+  }
+}
+
+/// A round icon button sized for a thumb, with the label kept as a tooltip so
+/// the meaning is still reachable.
+class _PeekAction extends StatelessWidget {
+  final IconData icon;
+  final String tooltip;
+  final Color background;
+  final Color foreground;
+  final VoidCallback onTap;
+
+  const _PeekAction({
+    required this.icon,
+    required this.tooltip,
+    required this.background,
+    required this.foreground,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width: 46,
+          height: 46,
+          decoration: BoxDecoration(color: background, shape: BoxShape.circle),
+          child: Icon(icon, color: foreground, size: 21),
+        ),
+      ),
+    );
+  }
+}
+
+class _PeekRow extends StatelessWidget {
+  final IncidentModel incident;
+  final Color color;
+  final int? eta;
+  final String? photo;
+  final VoidCallback onOpenProfile;
+  final VoidCallback onCall;
+
+  const _PeekRow({
+    required this.incident,
+    required this.color,
+    required this.onOpenProfile,
+    required this.onCall,
+    this.eta,
+    this.photo,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final name = incident.assignedToName ?? 'Responder';
+    return Row(
+      children: [
+        GestureDetector(
+          onTap: onOpenProfile,
+          child: _Face(photo: photo, name: name, color: color, size: 48),
+        ),
+        const SizedBox(width: 14),
+        Expanded(
+          child: GestureDetector(
+            onTap: onOpenProfile,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppText.cardTitle),
+                const SizedBox(height: 2),
+                Text(
+                    eta != null
+                        ? '~ min away'
+                        : IncidentStatus.label(incident.status),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppText.meta),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(width: 10),
+        GestureDetector(
+          onTap: onCall,
+          child: Container(
+            width: 46,
+            height: 46,
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+            child: const Icon(Icons.call_rounded, color: Colors.white, size: 21),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _DetailRow extends StatelessWidget {
   final IconData icon;
   final String label;
@@ -1041,7 +1458,7 @@ class _DetailRow extends StatelessWidget {
             child: Text(
               label,
               style: TextStyle(
-                  fontSize: 13,
+                  fontSize: 14,
                   color: highlight ? c : AppColors.textDark,
                   fontWeight:
                       highlight ? FontWeight.w600 : FontWeight.normal),
@@ -1089,7 +1506,7 @@ class _WaitingBanner extends StatelessWidget {
             Text('Alerting nearby responders…',
                 style: TextStyle(
                     color: Colors.white,
-                    fontSize: 12,
+                    fontSize: 13,
                     fontWeight: FontWeight.w600)),
           ],
         ),
@@ -1194,7 +1611,7 @@ class _TripStrip extends StatelessWidget {
             Text(
               'Straight-line estimate — live routing unavailable',
               style: TextStyle(
-                fontSize: 11,
+                fontSize: 12.5,
                 color: AppColors.textMedium.withValues(alpha: 0.9),
               ),
             ),
@@ -1233,7 +1650,7 @@ class _TripStrip extends StatelessWidget {
           const SizedBox(height: 2),
           Text(
             label,
-            style: const TextStyle(fontSize: 11, color: AppColors.textMedium),
+            style: const TextStyle(fontSize: 12.5, color: AppColors.textMedium),
           ),
         ],
       ),

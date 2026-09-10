@@ -3,51 +3,118 @@
 @tailwind utilities;
 
 @layer base {
+  /* The console runs on the same ground, ink and typeface as the public site.
+     It used to be slate-and-Inter, which made moving between them feel like
+     two different products. */
   body {
-    @apply bg-slate-50 text-gray-900 antialiased;
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    @apply bg-cream text-ink antialiased;
+    font-family: 'Outfit', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   }
 
   * {
     scrollbar-width: thin;
-    scrollbar-color: #d1d5db transparent;
+    scrollbar-color: rgba(28, 10, 38, 0.2) transparent;
   }
-  *::-webkit-scrollbar { width: 5px; height: 5px; }
+  *::-webkit-scrollbar { width: 6px; height: 6px; }
   *::-webkit-scrollbar-track { background: transparent; }
-  *::-webkit-scrollbar-thumb { @apply bg-gray-300 rounded-full; }
-  *::-webkit-scrollbar-thumb:hover { @apply bg-gray-400; }
+  *::-webkit-scrollbar-thumb { @apply bg-ink/20 rounded-full; }
+  *::-webkit-scrollbar-thumb:hover { @apply bg-ink/35; }
 }
 
 @layer components {
+  /* ── Landing-page primitives ──────────────────────────────────────────────
+     The reference leans on three moves: a near-black pill button carrying an
+     arrow, oversized display headings with negative tracking, and generously
+     rounded colour-blocked cards. These keep that consistent across sections. */
+
+  .lp-btn {
+    @apply inline-flex items-center gap-2 bg-ink text-cream px-6 py-3.5 rounded-xl
+           text-sm font-semibold tracking-tight
+           hover:bg-block-plum hover:gap-3 transition-all duration-300;
+  }
+  .lp-btn-light {
+    @apply inline-flex items-center gap-2 bg-cream-card text-ink px-6 py-3.5 rounded-xl
+           text-sm font-semibold tracking-tight
+           hover:gap-3 transition-all duration-300;
+  }
+  .lp-btn-ghost {
+    @apply inline-flex items-center gap-2 border border-ink/15 text-ink px-6 py-3.5 rounded-xl
+           text-sm font-semibold tracking-tight
+           hover:border-ink/40 hover:gap-3 transition-all duration-300;
+  }
+
+  /* Display heading: heavy, tightly tracked, two-line by default. */
+  .lp-display {
+    @apply font-bold tracking-tightest text-ink leading-[1.04];
+  }
+
+  /* Colour-blocked bento card. */
+  .lp-card {
+    @apply rounded-3xl p-8 flex flex-col;
+  }
+
+  /* Store-badge shape. eKonnect has no store listings yet, so these carry our
+     own glyphs and wording rather than imitating the App Store / Play badges —
+     the layout weight is the same, the claim is not. */
+  .store-badge {
+    @apply inline-flex items-center gap-3 bg-ink text-cream px-5 py-3 rounded-xl
+           transition-all duration-300;
+  }
+  a.store-badge {
+    @apply hover:bg-block-plum hover:-translate-y-0.5;
+  }
+
+  /* ── Console primitives ───────────────────────────────────────────────
+     Same vocabulary as the landing page: ink pills, cream surfaces, hairline
+     ink borders instead of grey ones, and warm shadows rather than neutral
+     drops (a grey shadow on cream reads as dirt). */
+
   .btn-primary {
-    @apply inline-flex items-center gap-2 bg-primary text-white px-4 py-2 rounded-xl text-sm font-semibold hover:bg-purple-900 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-sm;
+    @apply inline-flex items-center gap-2 bg-ink text-cream px-4 py-2.5 rounded-xl text-sm font-semibold tracking-tight
+           hover:bg-block-plum hover:gap-3 active:scale-[0.98] transition-all duration-300
+           disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-ink disabled:hover:gap-2;
   }
   .btn-danger {
-    @apply inline-flex items-center gap-2 bg-red-600 text-white px-4 py-2 rounded-xl text-sm font-semibold hover:bg-red-700 active:scale-95 transition-all shadow-sm;
+    @apply inline-flex items-center gap-2 bg-emergency text-white px-4 py-2.5 rounded-xl text-sm font-semibold tracking-tight
+           hover:opacity-90 active:scale-[0.98] transition-all;
   }
   .btn-outline {
-    @apply inline-flex items-center gap-2 border border-gray-200 bg-white text-gray-700 px-4 py-2 rounded-xl text-sm font-medium hover:bg-gray-50 active:scale-95 transition-all;
+    @apply inline-flex items-center gap-2 border border-ink/15 bg-cream-card text-ink px-4 py-2.5 rounded-xl text-sm font-semibold tracking-tight
+           hover:border-ink/40 active:scale-[0.98] transition-all;
   }
   .btn-ghost {
-    @apply inline-flex items-center gap-2 text-gray-500 px-3 py-2 rounded-xl text-sm font-medium hover:bg-gray-100 active:scale-95 transition-all;
+    @apply inline-flex items-center gap-2 text-ink-soft px-3 py-2 rounded-xl text-sm font-medium
+           hover:bg-ink/[0.05] hover:text-ink active:scale-[0.98] transition-all;
   }
   .card {
-    @apply bg-white rounded-2xl shadow-sm border border-gray-100 p-5;
+    @apply bg-cream-card rounded-2xl border border-ink/[0.07] p-5
+           shadow-[0_12px_30px_-20px_rgba(28,10,38,0.25)];
+  }
+  /* A card that is the page's main surface rather than one tile among many. */
+  .panel {
+    @apply bg-cream-card rounded-3xl border border-ink/[0.07] p-6 sm:p-8
+           shadow-[0_20px_50px_-32px_rgba(28,10,38,0.3)];
   }
   .badge {
     @apply inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold;
   }
   .input {
-    @apply w-full border border-gray-200 bg-white rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-all placeholder:text-gray-400;
+    @apply w-full border border-ink/15 bg-cream-card rounded-xl px-4 py-2.5 text-sm
+           focus:outline-none focus:ring-4 focus:ring-primary/10 focus:border-primary
+           transition-all placeholder:text-ink-mute/60;
   }
   .page-header {
-    @apply flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6;
+    @apply flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-8;
   }
   .page-title {
-    @apply text-xl font-bold text-gray-900;
+    @apply text-3xl font-bold tracking-tightest text-ink;
   }
   .page-subtitle {
-    @apply text-sm text-gray-500 mt-0.5;
+    @apply text-sm text-ink-soft mt-1.5;
+  }
+  /* Small tracked capital label, the console's echo of the landing eyebrow. */
+  .eyebrow {
+    @apply block text-xs font-semibold tracking-[0.16em] uppercase text-primary;
   }
   .stat-card {
     @apply card flex items-center gap-4;
@@ -56,18 +123,85 @@
     @apply w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0;
   }
   .table-wrapper {
-    @apply bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden;
+    @apply bg-cream-card rounded-2xl border border-ink/[0.07] overflow-hidden
+           shadow-[0_12px_30px_-20px_rgba(28,10,38,0.25)];
   }
   .table-head {
-    @apply bg-gray-50/80 border-b border-gray-100;
+    @apply bg-cream-deep/60 border-b border-ink/[0.07];
   }
   .th {
-    @apply text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide;
+    @apply text-left px-4 py-3 text-[11px] font-semibold text-ink-mute uppercase tracking-[0.12em];
   }
   .td {
     @apply px-4 py-3.5 text-sm;
   }
   .tr {
-    @apply border-b border-gray-50 hover:bg-gray-50/60 transition-colors;
+    @apply border-b border-ink/[0.05] hover:bg-cream transition-colors;
   }
+
+  /* Selectable tile — the choice control used across the console. */
+  .tile {
+    @apply text-left rounded-2xl border-2 p-4 transition-all duration-300;
+  }
+  .tile-on {
+    @apply border-primary bg-primary/[0.06] text-ink;
+  }
+  .tile-off {
+    @apply border-ink/10 text-ink-soft hover:border-ink/25 hover:bg-cream;
+  }
+}
+
+/* Story-style progress fill on the auto-playing product section. */
+@keyframes ek-fill {
+  from { width: 0%; }
+  to   { width: 100%; }
+}
+
+/* Listening waveform on the voice-triage card. Each bar runs the same
+   animation on its own delay, which is what makes the row look like speech
+   rather than a row of bars moving in lockstep. */
+@keyframes ek-wave {
+  from { transform: scaleY(0.35); }
+  to   { transform: scaleY(1); }
+}
+
+/* Product deck sizing.
+   Phones get a full-bleed slide with no gap: at 84vw the peeking neighbours
+   were two slivers of dead margin, and a rounded card inside an already-narrow
+   screen put a third frame around content that was mostly a phone screenshot —
+   a picture of a phone, in a card, on a phone. From sm upward the card returns
+   and the neighbours peek again, which is where that reads as depth. */
+.ek-deck { --slide: 100vw; --gap: 0px; }
+@media (min-width: 640px) {
+  .ek-deck { --slide: min(1120px, 84vw); --gap: 28px; }
+}
+
+/* Boot screen. The halo breathes and the ring turns; the mark itself never
+   rotates, because a spinning logo reads as a hung page. */
+@keyframes ek-breathe {
+  0%, 100% { opacity: 0.45; transform: scale(0.9); }
+  50%      { opacity: 1;    transform: scale(1.12); }
+}
+.ek-breathe { animation: ek-breathe 2.6s ease-in-out infinite; }
+
+/* Tailwind's animate-spin is a 1s linear turn, which reads as frantic on a
+   ring this large. Slow it and give it an eased sweep instead. */
+.ek-ring {
+  animation-duration: 1.6s;
+  animation-timing-function: cubic-bezier(.6, .1, .4, .9);
+}
+
+/* Held invisible for a beat before fading in, so a sign-in that fails fast
+   shows its error rather than flashing a full-screen loader on the way. */
+@keyframes ek-fade-in { from { opacity: 0; } to { opacity: 1; } }
+.ek-boot-in { animation: ek-fade-in 320ms ease 260ms both; }
+
+@media (prefers-reduced-motion: reduce) {
+  /* Decorative only — nothing here carries meaning that motion is required
+     to read, so it can stop outright. The ring keeps turning, at a calmer
+     pace: with the wording removed it is the only remaining signal that the
+     page is still working. */
+  [style*='ek-wave'] { animation: none !important; }
+  .ek-breathe { animation: none; opacity: 0.7; }
+  .ek-ring    { animation-duration: 3s; animation-timing-function: linear; }
 }

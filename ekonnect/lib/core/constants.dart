@@ -1,50 +1,16 @@
 import 'package:flutter/material.dart';
 
-/// Three-color palette: white, deep purple, coral — plus neutral greys for
-/// text/dividers (greys are not counted as palette colors). Every legacy
-/// colour name is kept as an alias mapped onto the palette so the whole app
-/// re-skins from this single place.
-class AppColors {
-  // ── Core palette ────────────────────────────────────────────────
-  static const primary = Color(0xFF3D1152); // deep purple — brand / chrome
-  static const accent = Color(0xFFFF4D5E); // coral red — action / emergency
-  static const surface = Colors.white;
-
-  // Purple tints used sparingly for depth (still "the purple").
-  static const primaryDark = Color(0xFF1E0830);
-  static const primarySoft = Color(0xFFF3EEF8); // faint purple wash on white
-
-  // Neutral light-grey card surface (Bolt-style tiles).
-  static const surfaceAlt = Color(0xFFF1F1F4);
-
-  // ── Neutrals ────────────────────────────────────────────────────
-  static const background = Color(0xFFFAF9FC); // near-white
-  static const textDark = Color(0xFF1B1524);
-  static const textMedium = Color(0xFF6B6675);
-  static const textLight = Color(0xFFA7A2B2);
-  static const divider = Color(0xFFEBE7F1);
-
-  // ── Semantic aliases (mapped onto the palette) ──────────────────
-  static const secondary = primary;
-  static const emergency = accent;
-  static const success = primary;
-  static const warning = accent;
-  static const info = primary;
-
-  // ── Incident-type colours — unified to the palette ──────────────
-  static const fireColor = primary;
-  static const medicalColor = primary;
-  static const floodColor = primary;
-  static const securityColor = primary;
-}
+/// Names, routes and domain vocabulary.
+///
+/// Everything visual — colour, type, spacing, shape — lives in theme.dart
+/// and is re-exported here, so the hundred screens that already import this
+/// file keep AppColors and AppText in scope without an extra import.
+export 'theme.dart';
+import 'theme.dart';
 
 class AppRoutes {
   static const splash = '/';
-  static const terms = '/terms';
   static const login = '/login';
-  static const phoneAuth = '/phone-auth';
-  static const roleSelect = '/role-select';
-  static const profileSetup = '/profile-setup';
   static const userHome = '/user/home';
   static const sosWaiting = '/user/sos';
   static const incidentHistory = '/user/history';
@@ -57,6 +23,7 @@ class AppRoutes {
   static const tutorial = '/tutorial';
   static const aiChat = '/ai-chat';
   static const myProviders = '/my-providers';
+  static const notifications = '/notifications';
 }
 
 class AppRoles {
@@ -123,6 +90,19 @@ class IncidentStatus {
   static const resolved = 'resolved';
   static const cancelled = 'cancelled';
 
+  /// A crew attended and could not finish the job — no ambulance available for
+  /// transport, patient refused care, wrong address.
+  ///
+  /// Deliberately not `cancelled`. A cancel means nothing was needed; this
+  /// means something was needed and the network did not deliver it. Filing
+  /// both in one bucket would hide exactly the failures worth measuring.
+  static const closedUnresolved = 'closed_unresolved';
+
+  /// Statuses after which nobody may accept, re-open or act on the incident.
+  static const closed = [resolved, cancelled, closedUnresolved];
+
+  static bool isClosed(String? status) => closed.contains(status);
+
   static String label(String status) {
     switch (status) {
       case pending: return 'Waiting for responder…';
@@ -131,6 +111,7 @@ class IncidentStatus {
       case arrived: return 'Responder arrived';
       case resolved: return 'Incident resolved';
       case cancelled: return 'Cancelled';
+      case closedUnresolved: return 'Closed — not resolved';
       default: return status;
     }
   }
@@ -151,6 +132,9 @@ class Collections {
   /// Clients registered with a private provider. A private team only answers
   /// calls from people who appear here.
   static const subscriptions = 'subscriptions';
+
+  /// A kept copy of each push, so a missed banner is still findable.
+  static const notifications = 'notifications';
 }
 
 /// Who a responder is allowed to serve.
@@ -167,18 +151,47 @@ class ResponderVisibility {
   /// assigns directly. Company medics, private hospital fleets.
   static const private = 'private';
 
-  static const values = [public, private];
+  /// Narrower still: only the specific clients on their Care Point's list, and
+  /// never the open network — not even when a private call is opened to the
+  /// public after its exclusivity window expires.
+  ///
+  /// This is the difference a retained corporate crew pays for: they are never
+  /// pulled onto a passing road traffic accident.
+  static const clients = 'clients';
 
-  static String label(String? v) =>
-      v == private ? 'Private responder' : 'Public responder';
+  static const values = [public, private, clients];
 
-  static String describe(String? v) => v == private
-      ? 'Only receives calls from their own organisation, or ones an admin '
-          'assigns directly.'
-      : 'Receives any nearby emergency on the public network.';
+  /// Scopes that never see an open-network call.
+  static bool isExclusive(String? v) => v == private || v == clients;
 
-  static IconData icon(String? v) =>
-      v == private ? Icons.business_rounded : Icons.public_rounded;
+  static String label(String? v) {
+    switch (v) {
+      case private: return 'Private responder';
+      case clients: return 'Named clients only';
+      default: return 'Public responder';
+    }
+  }
+
+  static String describe(String? v) {
+    switch (v) {
+      case private:
+        return 'Only receives calls from their own organisation, or ones an '
+            'admin assigns directly.';
+      case clients:
+        return 'Only receives calls from clients on their Care Point list. '
+            'Never joins the open network.';
+      default:
+        return 'Receives any nearby emergency on the public network.';
+    }
+  }
+
+  static IconData icon(String? v) {
+    switch (v) {
+      case private: return Icons.business_rounded;
+      case clients: return Icons.workspace_premium_rounded;
+      default: return Icons.public_rounded;
+    }
+  }
 }
 
 /// Where a responder sits in the admin approval pipeline.

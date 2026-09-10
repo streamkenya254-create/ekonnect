@@ -113,7 +113,7 @@ class _IncidentCardScreenState extends State<IncidentCardScreen> {
                               Text(
                                 _timeAgo(incident.createdAt),
                                 style: const TextStyle(
-                                    fontSize: 12,
+                                    fontSize: 13,
                                     color: AppColors.textMedium),
                               ),
                             ],
@@ -134,7 +134,7 @@ class _IncidentCardScreenState extends State<IncidentCardScreen> {
                             child: Text(
                               IncidentStatus.label(incident.status),
                               style: TextStyle(
-                                fontSize: 11,
+                                fontSize: 12.5,
                                 fontWeight: FontWeight.bold,
                                 color: _statusColor(incident.status),
                               ),
@@ -170,7 +170,7 @@ class _IncidentCardScreenState extends State<IncidentCardScreen> {
                               const SizedBox(width: 6),
                               const Text('Caller Info',
                                   style: TextStyle(
-                                      fontSize: 11,
+                                      fontSize: 12.5,
                                       fontWeight: FontWeight.bold,
                                       color: AppColors.textMedium,
                                       letterSpacing: 0.5)),
@@ -213,7 +213,7 @@ class _IncidentCardScreenState extends State<IncidentCardScreen> {
                               child: Text(
                                 'Assigned to ${incident.assignedToName}',
                                 style: const TextStyle(
-                                    fontSize: 13,
+                                    fontSize: 14,
                                     color: AppColors.primary,
                                     fontWeight: FontWeight.w600),
                               ),
@@ -265,11 +265,23 @@ class _IncidentCardScreenState extends State<IncidentCardScreen> {
     setState(() => _accepting = true);
     final provider = context.read<IncidentProvider>();
     final nav = Navigator.of(context);
-    await provider.acceptIncident(incident.id);
-    if (context.mounted) {
-      nav.pushReplacementNamed(AppRoutes.activeJob,
-          arguments: incident.id);
+    final messenger = ScaffoldMessenger.of(context);
+
+    final won = await provider.acceptIncident(incident.id);
+    if (!context.mounted) return;
+
+    if (!won) {
+      // Losing the race is ordinary. Say so and send them back to the list
+      // rather than opening a job that belongs to somebody else.
+      setState(() => _accepting = false);
+      messenger.showSnackBar(SnackBar(
+        content: Text(provider.error ?? 'Could not take this call.'),
+        backgroundColor: AppColors.textDark,
+      ));
+      nav.pop();
+      return;
     }
+    nav.pushReplacementNamed(AppRoutes.activeJob, arguments: incident.id);
   }
 
   Color _statusColor(String status) {

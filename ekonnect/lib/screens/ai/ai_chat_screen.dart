@@ -89,7 +89,7 @@ class _AiChatScreenState extends State<AiChatScreen> {
           children: [
             Text('AI Emergency Assistant'),
             Text('Powered by Groq AI',
-                style: TextStyle(fontSize: 11, color: Colors.white70)),
+                style: TextStyle(fontSize: 12.5, color: Colors.white70)),
           ],
         ),
         actions: [
@@ -140,7 +140,7 @@ class _AiChatScreenState extends State<AiChatScreen> {
                 separatorBuilder: (_, _) => const SizedBox(width: 8),
                 itemBuilder: (context, i) => ActionChip(
                   label: Text(_suggestions[i],
-                      style: const TextStyle(fontSize: 12)),
+                      style: const TextStyle(fontSize: 13)),
                   onPressed: () => _send(_suggestions[i]),
                   backgroundColor: AppColors.primary.withValues(alpha: 0.08),
                   side: BorderSide(
@@ -164,7 +164,7 @@ class _AiChatScreenState extends State<AiChatScreen> {
                   child: Text('Life-threatening? Call 999 immediately',
                       style: TextStyle(
                           color: AppColors.emergency,
-                          fontSize: 12,
+                          fontSize: 13,
                           fontWeight: FontWeight.w600)),
                 ),
                 GestureDetector(
@@ -177,7 +177,7 @@ class _AiChatScreenState extends State<AiChatScreen> {
                       style: TextStyle(
                           color: AppColors.emergency,
                           fontWeight: FontWeight.bold,
-                          fontSize: 13)),
+                          fontSize: 14)),
                 ),
               ],
             ),

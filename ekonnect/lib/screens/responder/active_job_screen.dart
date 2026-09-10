@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:provider/provider.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/constants.dart';
 import '../../models/incident_model.dart';
@@ -15,6 +14,9 @@ import '../../services/routes_service.dart';
 import '../../services/voice_guidance_service.dart';
 import '../../models/care_point_model.dart';
 import '../../services/firestore_service.dart';
+import '../../widgets/user_avatar.dart';
+import 'job_outcome_screen.dart';
+import 'patient_screen.dart';
 import 'referral_sheet.dart';
 
 /// Exposes the "replay this route as if driving" control on the job map.
@@ -66,6 +68,11 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
   /// The care point currently being transported to, if any.
   CarePoint? _headingTo;
   bool _arrivedAtCarePoint = false;
+
+  /// Where the crew was when they accepted, and whether we have already offered
+  /// to mark them en route. Both exist so the offer is made exactly once.
+  LatLng? _acceptedAt;
+  bool _enRouteOffered = false;
 
   /// Guards the one-off "starting navigation" announcement per trip.
   bool _announcedStart = false;
@@ -258,6 +265,7 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
       _followCamera(here, heading);
       _speakGuidance(here);
       _maybeReroute(incident, here);
+      _maybeOfferEnRoute(incident, here);
     });
 
     // Kick off an immediate route so the first frame already has guidance.
@@ -362,6 +370,115 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
     }
   }
 
+  /// Everything about the patient, on demand.
+  ///
+  /// The panel used to print name and number permanently, which cost a third
+  /// of its height on a leg where the crew already has the patient beside
+  /// them. Here there is room for what actually gets looked up mid-job — the
+  /// triage notes, the emergency type, the pickup point.
+  /// Opens the patient in full.
+  ///
+  /// A page rather than a sheet: it carries their photo, their contact and
+  /// the way to message them, which is what the card gave up to stay legible
+  /// with a patient in front of you.
+  Future<void> _showPatientDetails(IncidentModel incident) async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => PatientScreen(incident: incident)),
+    );
+  }
+
+  /// Calls off the referral. The patient recovered, the facility turned them
+  /// away, or it was chosen in error — either way the crew is back on scene
+  /// and the transport leg should not sit half-finished in the record.
+  Future<void> _cancelReferral(IncidentModel incident) async {
+    final target = _headingTo;
+    if (target == null) return;
+
+    final reason = await _quickReason(
+      title: 'Cancel this referral?',
+      blurb: 'The journey to ${target.name} is called off and you go back to '
+          'being on scene. The attempt stays in the record.',
+      hint: 'Patient recovered, no longer needs transport',
+      confirm: 'Cancel referral',
+    );
+    if (reason == null || !mounted) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    await context.read<IncidentProvider>().cancelReferral(target.name, reason);
+    if (!mounted) return;
+
+    setState(() {
+      _headingTo = null;
+      _arrivedAtCarePoint = false;
+      _route = null;
+    });
+    // Back to the patient as the destination.
+    _fetchRoute(incident.userLat, incident.userLng, fitCamera: !_navMode);
+    messenger.showSnackBar(
+      SnackBar(content: Text('Referral to ${target.name} cancelled')),
+    );
+  }
+
+  Future<void> _standDownBackup() async {
+    final messenger = ScaffoldMessenger.of(context);
+    await context.read<IncidentProvider>().cancelBackupRequest();
+    if (!mounted) return;
+    messenger.showSnackBar(
+      const SnackBar(content: Text('Backup request stood down')),
+    );
+  }
+
+  Future<String?> _quickReason({
+    required String title,
+    required String blurb,
+    required String hint,
+    required String confirm,
+  }) async {
+    final controller = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(title),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(blurb,
+                style: const TextStyle(
+                    fontSize: 14, color: AppColors.textLight)),
+            const SizedBox(height: 14),
+            TextField(
+              controller: controller,
+              autofocus: true,
+              maxLines: 2,
+              decoration: InputDecoration(
+                hintText: hint,
+                border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12)),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('Keep it')),
+          ElevatedButton(
+            onPressed: () {
+              final v = controller.text.trim();
+              if (v.isEmpty) return;
+              Navigator.pop(ctx, v);
+            },
+            style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.emergency),
+            child: Text(confirm),
+          ),
+        ],
+      ),
+    );
+  }
+
   /// Confirms arrival at the care point currently being travelled to.
   Future<void> _confirmArrivalAtCarePoint(IncidentModel incident) async {
     final target = _headingTo;
@@ -397,7 +514,7 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
               'Briefly, why could $carePointName not take this patient? This '
               'stays on the incident record.',
               style: const TextStyle(
-                  fontSize: 13, height: 1.4, color: AppColors.textMedium),
+                  fontSize: 14, height: 1.4, color: AppColors.textMedium),
             ),
             const SizedBox(height: 12),
             TextField(
@@ -492,6 +609,62 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
 
   /// Re-fetches the route only when it is actually worth spending a call:
   /// enough time has passed, or the driver has moved far enough.
+  /// Offers to mark en route once the crew has actually set off.
+  ///
+  /// A prompt, not an automatic flip. Detection is a heuristic — a crew
+  /// crossing a car park looks identical to a crew pulling away — and silently
+  /// telling a patient someone is on the way when they are still finding their
+  /// keys is a worse failure than asking. One tap either way, offered once.
+  void _maybeOfferEnRoute(IncidentModel incident, LatLng here) {
+    if (_enRouteOffered) return;
+    if (incident.status != IncidentStatus.assigned) return;
+
+    final origin = _acceptedAt;
+    if (origin == null) {
+      _acceptedAt = here;
+      return;
+    }
+
+    final movedFromStart = RoutesService.metresBetween(origin, here);
+    if (movedFromStart < 120) return;
+
+    // Moving is not enough — it has to be movement *towards* the patient, or
+    // a crew heading home for their shift change would be marked en route.
+    final dest = LatLng(incident.userLat, incident.userLng);
+    final before = RoutesService.metresBetween(origin, dest);
+    final now = RoutesService.metresBetween(here, dest);
+    if (now >= before - 80) return;
+
+    _enRouteOffered = true;
+    _promptEnRoute();
+  }
+
+  Future<void> _promptEnRoute() async {
+    final provider = context.read<IncidentProvider>();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('On your way?'),
+        content: const Text(
+            'It looks like you have set off. Marking en route starts live '
+            'tracking for the patient and gives them an arrival estimate.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Not yet')),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary),
+            child: const Text('Yes, en route'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    await provider.updateStatus(IncidentStatus.enRoute);
+  }
+
   void _maybeReroute(IncidentModel incident, LatLng here) {
     // No route yet means the initial fetch failed — typically GPS was not warm
     // at the instant navigation started, so _fetchRoute bailed with no origin.
@@ -523,6 +696,52 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
     final provider = context.read<IncidentProvider>();
     final nav = Navigator.of(context);
 
+    // ── Transport leg ────────────────────────────────────────────────
+    final target = _headingTo;
+    if (target != null && target.isVisitable) {
+      if (!_arrivedAtCarePoint) {
+        await _confirmArrivalAtCarePoint(incident);
+        return;
+      }
+      // Handed over: the patient is now the facility's, so the job closes.
+      final confirm = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: Text('Handed over to ${target.name}?'),
+          content: const Text(
+              'Confirms the patient has been admitted and closes the job. '
+              'The full journey stays on the record.'),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Not yet')),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.success),
+              child: const Text('Confirm handover'),
+            ),
+          ],
+        ),
+      );
+      if (confirm != true || !mounted) return;
+      // Pass the incident this screen is showing: the provider's copy can be
+      // null on a resumed or backup job, and closing must not depend on it.
+      final closed = await provider.resolveIncident(incident: incident);
+      if (!mounted) return;
+      if (!closed) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(provider.error ?? 'Could not close this job.'),
+          backgroundColor: AppColors.emergency,
+        ));
+        return;
+      }
+      nav.pushReplacementNamed(AppRoutes.responderHome);
+      return;
+    }
+
+    // ── Leg to the patient ───────────────────────────────────────────
     final nextIndex = _steps.indexOf(incident.status) + 1;
     if (nextIndex >= _steps.length) return;
     final nextStatus = _steps[nextIndex];
@@ -548,8 +767,17 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
         ),
       );
       if (confirm != true || !mounted) return;
-      await provider.resolveIncident();
+      // Pass the incident this screen is showing: the provider's copy can be
+      // null on a resumed or backup job, and closing must not depend on it.
+      final closed = await provider.resolveIncident(incident: incident);
       if (!mounted) return;
+      if (!closed) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(provider.error ?? 'Could not close this job.'),
+          backgroundColor: AppColors.emergency,
+        ));
+        return;
+      }
       nav.pushReplacementNamed(AppRoutes.responderHome);
     } else {
       await provider.updateStatus(nextStatus);
@@ -616,7 +844,11 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
     }
 
     final color = IncidentType.color(incident.type);
-    final stepIdx = _steps.indexOf(incident.status).clamp(0, 3);
+    final journey = JobJourney.of(
+      incident,
+      headingTo: _headingTo,
+      arrivedAtCarePoint: _arrivedAtCarePoint,
+    );
     final isEnRoute = incident.status == IncidentStatus.enRoute;
     final topPad = MediaQuery.of(context).padding.top;
 
@@ -679,7 +911,7 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
                       const SizedBox(width: 6),
                       Text(IncidentType.label(incident.type),
                           style: const TextStyle(
-                              color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
+                              color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold)),
                     ],
                   ),
                 ),
@@ -703,7 +935,7 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
                         SizedBox(width: 4),
                         Text('Home',
                             style: TextStyle(
-                                fontSize: 13,
+                                fontSize: 14,
                                 color: AppColors.textDark,
                                 fontWeight: FontWeight.w600)),
                       ],
@@ -714,10 +946,43 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
             ),
           ),
 
+          // ── What this leg is, and how to call it off ──────────────────
+          //
+          // A referral or a backup request changes what the crew is doing; the
+          // map should say so, and both are things that get overtaken by
+          // events — the patient recovers, the second crew turns out not to be
+          // needed. Neither used to be reversible.
+          if (_headingTo != null || incident.backupRequested)
+            Positioned(
+              top: topPad + 62,
+              left: 12,
+              // Clear of the floating control column, which was slicing
+              // "Cancel referral" off the edge of the screen.
+              right: 76,
+              child: _LegBanner(
+                title: _headingTo != null
+                    ? 'Transporting to ${_headingTo!.name}'
+                    : 'Backup requested',
+                subtitle: _headingTo != null
+                    ? (_arrivedAtCarePoint
+                        ? 'Arrived — confirm the handover below'
+                        : 'Destination changed to the care point')
+                    : 'Waiting for a second crew to join you',
+                icon: _headingTo != null
+                    ? Icons.local_hospital_rounded
+                    : Icons.group_add_rounded,
+                colour: _headingTo != null ? AppColors.accent : AppColors.primary,
+                cancelLabel: _headingTo != null ? 'Cancel referral' : 'Stand down',
+                onCancel: _headingTo != null
+                    ? () => _cancelReferral(incident)
+                    : _standDownBackup,
+              ),
+            ),
+
           // ── Turn-by-turn instruction banner (in-app navigation) ───────
           if (_navMode && _route != null)
             Positioned(
-              top: topPad + 62,
+              top: topPad + (_headingTo != null || incident.backupRequested ? 136 : 62),
               left: 12,
               right: 12,
               child: _NavBanner(
@@ -759,7 +1024,7 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
                       padding: const EdgeInsets.only(bottom: 1),
                       child: Text(_route!.distanceText,
                           style: const TextStyle(
-                              color: AppColors.textMedium, fontSize: 12)),
+                              color: AppColors.textMedium, fontSize: 13)),
                     ),
                   ],
                 ),
@@ -873,22 +1138,23 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
             child: _BottomPanel(
               incident: incident,
               color: color,
-              stepIdx: stepIdx,
+              journey: journey,
               isExpanded: _isExpanded,
               distanceText: _route?.distanceText,
               durationText: _route?.durationText,
               onToggle: () => setState(() => _isExpanded = !_isExpanded),
               onAdvance: () => _advanceStatus(incident),
               onCancel: () => _cancelJob(incident),
-              onCall: () async {
-                final uri = Uri(scheme: 'tel', path: incident.userPhone);
-                if (await canLaunchUrl(uri)) launchUrl(uri);
-              },
-              onChat: () => Navigator.pushNamed(context, AppRoutes.chat, arguments: {
-                'incidentId': incident.id,
-                'otherName': incident.userName,
-                'otherPhone': incident.userPhone,
-              }),
+              onNotResolved: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => JobOutcomeScreen(
+                    incident: incident,
+                    onRefer: () => _openReferral(incident),
+                  ),
+                ),
+              ),
+              onPatientDetails: () => _showPatientDetails(incident),
               onNavigate: () =>
                   _navMode ? _stopNavigation() : _startNavigation(incident),
             ),
@@ -901,59 +1167,134 @@ class _ActiveJobScreenState extends State<ActiveJobScreen> {
 
 // ── Bottom Panel ──────────────────────────────────────────────────────────────
 
+/// The stage of the job the crew is actually in.
+///
+/// The old bar was four fixed dots — Assigned, En Route, Arrived, Resolved —
+/// which stopped describing anything the moment a referral turned the job into
+/// a second trip. A journey with a referral has two legs and the crew is in
+/// one of them; the bar now says which, and what the steps of *that* leg are.
+class JobJourney {
+  final String title;
+  final String? subtitle;
+  final List<String> labels;
+  final List<IconData> icons;
+  final int index;
+
+  /// Second leg — transporting to a care point rather than driving to a
+  /// patient. The map swaps its destination to match.
+  final bool isTransportLeg;
+
+  /// What the big button says here. "Resolved" is wrong on a transport leg:
+  /// the crew is not finishing the job, they are handing the patient over.
+  final String primaryLabel;
+  final IconData primaryIcon;
+
+  const JobJourney({
+    required this.title,
+    this.subtitle,
+    required this.labels,
+    required this.icons,
+    required this.index,
+    required this.primaryLabel,
+    required this.primaryIcon,
+    this.isTransportLeg = false,
+  });
+
+  static const _toPatientLabels = ['Assigned', 'On the way', 'On scene'];
+  static const _toPatientIcons = [
+    Icons.assignment_turned_in_outlined,
+    Icons.directions_car_outlined,
+    Icons.location_on_outlined,
+  ];
+  static const _transportLabels = ['Referred', 'Transporting', 'Handed over'];
+  static const _transportIcons = [
+    Icons.local_hospital_outlined,
+    Icons.airport_shuttle_outlined,
+    Icons.how_to_reg_outlined,
+  ];
+
+  factory JobJourney.of(
+    IncidentModel incident, {
+    CarePoint? headingTo,
+    required bool arrivedAtCarePoint,
+  }) {
+    if (headingTo != null && headingTo.isVisitable) {
+      return JobJourney(
+        title: 'Taking ${incident.userName} to ${headingTo.name}',
+        subtitle: arrivedAtCarePoint
+            ? 'Patient delivered — close the job when they are admitted'
+            : 'Referral accepted. Drive when ready.',
+        labels: _transportLabels,
+        icons: _transportIcons,
+        index: arrivedAtCarePoint ? 2 : 1,
+        isTransportLeg: true,
+        primaryLabel: arrivedAtCarePoint
+            ? 'Handed over — close job'
+            : 'Arrived at ${headingTo.name}',
+        primaryIcon: arrivedAtCarePoint
+            ? Icons.how_to_reg_rounded
+            : Icons.flag_rounded,
+      );
+    }
+
+    final idx = switch (incident.status) {
+      IncidentStatus.enRoute => 1,
+      IncidentStatus.arrived => 2,
+      _ => 0,
+    };
+    return JobJourney(
+      title: switch (idx) {
+        0 => 'Call accepted',
+        1 => 'On the way to ${incident.userName}',
+        _ => 'On scene with ${incident.userName}',
+      },
+      subtitle: idx == 2 ? 'Assess, then choose how this job ends' : null,
+      labels: _toPatientLabels,
+      icons: _toPatientIcons,
+      index: idx,
+      primaryLabel: switch (idx) {
+        0 => 'Mark on the way',
+        1 => 'Mark arrived',
+        _ => 'Resolved — job done',
+      },
+      primaryIcon: switch (idx) {
+        0 => Icons.directions_car_rounded,
+        1 => Icons.location_on_rounded,
+        _ => Icons.check_circle_outline,
+      },
+    );
+  }
+}
+
 class _BottomPanel extends StatelessWidget {
   final IncidentModel incident;
   final Color color;
-  final int stepIdx;
+  final JobJourney journey;
   final bool isExpanded;
   final String? distanceText;
   final String? durationText;
   final VoidCallback onToggle;
   final VoidCallback onAdvance;
   final VoidCallback onCancel;
-  final VoidCallback onCall;
-  final VoidCallback onChat;
+  final VoidCallback onNotResolved;
+  final VoidCallback onPatientDetails;
   final VoidCallback onNavigate;
 
-  static const _steps = [
-    IncidentStatus.assigned,
-    IncidentStatus.enRoute,
-    IncidentStatus.arrived,
-    IncidentStatus.resolved,
-  ];
-  static const _labels = ['Assigned', 'En Route', 'Arrived', 'Resolved'];
-  static const _icons = [
-    Icons.assignment_turned_in_outlined,
-    Icons.directions_car_outlined,
-    Icons.location_on_outlined,
-    Icons.check_circle_outline,
-  ];
 
   const _BottomPanel({
     required this.incident,
     required this.color,
-    required this.stepIdx,
+    required this.journey,
     required this.isExpanded,
     required this.distanceText,
     required this.durationText,
     required this.onToggle,
     required this.onAdvance,
     required this.onCancel,
-    required this.onCall,
-    required this.onChat,
+    required this.onNotResolved,
+    required this.onPatientDetails,
     required this.onNavigate,
   });
-
-  String get _nextLabel {
-    final idx = _steps.indexOf(incident.status);
-    if (idx < 0 || idx >= _labels.length - 1) return 'Done';
-    return 'Mark: ${_labels[idx + 1]}';
-  }
-
-  Color get _nextColor {
-    if (incident.status == IncidentStatus.arrived) return AppColors.success;
-    return color;
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -1020,11 +1361,67 @@ class _DetailPanel extends StatelessWidget {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
+                // ── Which leg of the journey this is ─────────────────
+                Row(
+                  children: [
+                    if (p.journey.isTransportLeg)
+                      Container(
+                        margin: const EdgeInsets.only(right: 8),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: AppColors.accent.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: const Text('LEG 2',
+                            style: TextStyle(
+                                fontSize: 11,
+                                letterSpacing: 0.8,
+                                fontWeight: FontWeight.bold,
+                                color: AppColors.accent)),
+                      ),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            p.journey.title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: AppText.cardTitle,
+                          ),
+                          if (p.journey.subtitle != null) ...[
+                            const SizedBox(height: 2),
+                            Text(p.journey.subtitle!,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: AppText.meta),
+                          ],
+                        ],
+                      ),
+                    ),
+                    // The patient, as a face in the corner. Everything the
+                    // card used to spell out — their name, a call button, a
+                    // message button — is one tap behind it now.
+                    const SizedBox(width: 12),
+                    GestureDetector(
+                      onTap: p.onPatientDetails,
+                      child: UserAvatar(
+                        user: null,
+                        fallbackName: p.incident.userName,
+                        size: 46,
+                        background: p.color.withValues(alpha: 0.12),
+                        foreground: p.color,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
                 // ── Stepper ──────────────────────────────────────────
                 Row(
-                  children: List.generate(_BottomPanel._steps.length, (i) {
-                    final done = i <= p.stepIdx;
-                    final active = i == p.stepIdx;
+                  children: List.generate(p.journey.labels.length, (i) {
+                    final done = i <= p.journey.index;
+                    final active = i == p.journey.index;
                     return Expanded(
                       child: Row(
                         children: [
@@ -1043,29 +1440,34 @@ class _DetailPanel extends StatelessWidget {
                                         : null,
                                   ),
                                   child: Icon(
-                                    done ? _BottomPanel._icons[i] : Icons.circle_outlined,
+                                    done ? p.journey.icons[i] : Icons.circle_outlined,
                                     size: active ? 17 : 13,
                                     color: done ? Colors.white : AppColors.textLight,
                                   ),
                                 ),
                                 const SizedBox(height: 4),
-                                Text(_BottomPanel._labels[i],
+                                // One line, always. "Assigned" was breaking
+                                // to "Assign / ed" once the columns narrowed.
+                                Text(p.journey.labels[i],
+                                    maxLines: 1,
+                                    overflow: TextOverflow.visible,
+                                    softWrap: false,
                                     style: TextStyle(
-                                        fontSize: 9,
+                                        fontSize: 11,
                                         fontWeight: active ? FontWeight.bold : FontWeight.normal,
                                         color: done ? p.color : AppColors.textLight),
                                     textAlign: TextAlign.center),
                               ],
                             ),
                           ),
-                          if (i < _BottomPanel._steps.length - 1)
+                          if (i < p.journey.labels.length - 1)
                             Expanded(
                               flex: 2,
                               child: Container(
                                 height: 2,
                                 margin: const EdgeInsets.only(bottom: 18),
                                 decoration: BoxDecoration(
-                                  color: i < p.stepIdx ? p.color : AppColors.divider,
+                                  color: i < p.journey.index ? p.color : AppColors.divider,
                                   borderRadius: BorderRadius.circular(1),
                                 ),
                               ),
@@ -1077,74 +1479,6 @@ class _DetailPanel extends StatelessWidget {
                 ),
 
                 const SizedBox(height: 14),
-
-                // ── Patient card ──────────────────────────────────────
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: p.color.withValues(alpha: 0.05),
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: p.color.withValues(alpha: 0.18)),
-                  ),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 40,
-                        height: 40,
-                        decoration: BoxDecoration(
-                          color: p.color.withValues(alpha: 0.12),
-                          shape: BoxShape.circle,
-                        ),
-                        child: Icon(Icons.person_pin_circle_outlined, color: p.color, size: 20),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              p.incident.userName.isNotEmpty ? p.incident.userName : 'Unknown Patient',
-                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppColors.textDark),
-                            ),
-                            Text(
-                              p.incident.userPhone.isNotEmpty ? p.incident.userPhone : 'No phone',
-                              style: TextStyle(color: p.color, fontSize: 12, fontWeight: FontWeight.w500),
-                            ),
-                          ],
-                        ),
-                      ),
-                      // Quick call button
-                      GestureDetector(
-                        onTap: p.onCall,
-                        child: Container(
-                          width: 36,
-                          height: 36,
-                          decoration: BoxDecoration(
-                            color: AppColors.success,
-                            shape: BoxShape.circle,
-                          ),
-                          child: const Icon(Icons.call, color: Colors.white, size: 18),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      // Chat
-                      GestureDetector(
-                        onTap: p.onChat,
-                        child: Container(
-                          width: 36,
-                          height: 36,
-                          decoration: BoxDecoration(
-                            color: p.color.withValues(alpha: 0.12),
-                            shape: BoxShape.circle,
-                          ),
-                          child: Icon(Icons.chat_bubble_outline, color: p.color, size: 18),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-
-                const SizedBox(height: 12),
 
                 // ── Action buttons ────────────────────────────────────
                 if (p.incident.isClosed) ...[
@@ -1160,6 +1494,38 @@ class _DetailPanel extends StatelessWidget {
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                     ),
                   ),
+                ] else if (p.incident.status == IncidentStatus.arrived) ...[
+                  // With the patient. This is the moment every remaining
+                  // decision belongs to, and until now the only way to refer
+                  // was an unlabelled hospital icon floating on the map.
+                  ElevatedButton.icon(
+                    onPressed: p.onAdvance,
+                    icon: Icon(p.journey.primaryIcon, size: 20),
+                    label: Text(p.journey.primaryLabel,
+                        style: const TextStyle(
+                            fontSize: 15, fontWeight: FontWeight.bold)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.success,
+                      foregroundColor: Colors.white,
+                      minimumSize: const Size(double.infinity, 52),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      elevation: 2,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  OutlinedButton.icon(
+                    onPressed: p.onNotResolved,
+                    icon: const Icon(Icons.more_horiz_rounded, size: 18),
+                    label: const Text('Not resolved — other options',
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: AppColors.textMedium,
+                      side: const BorderSide(color: AppColors.divider),
+                      minimumSize: const Size(double.infinity, 46),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14)),
+                    ),
+                  ),
                 ] else ...[
                   ElevatedButton.icon(
                     onPressed: p.onAdvance,
@@ -1169,10 +1535,10 @@ class _DetailPanel extends StatelessWidget {
                           : Icons.arrow_forward_rounded,
                       size: 20,
                     ),
-                    label: Text(p._nextLabel,
+                    label: Text(p.journey.primaryLabel,
                         style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: p._nextColor,
+                      backgroundColor: p.color,
                       foregroundColor: Colors.white,
                       minimumSize: const Size(double.infinity, 50),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
@@ -1255,13 +1621,13 @@ class _CompactStrip extends StatelessWidget {
                       IncidentStatus.label(p.incident.status),
                       style: TextStyle(
                           fontWeight: FontWeight.bold,
-                          fontSize: 13,
+                          fontSize: 14,
                           color: p.color),
                     ),
                     if (isEnRoute && hasEta)
                       Text('${p.durationText} · ${p.distanceText}',
                           style: const TextStyle(
-                              color: AppColors.textMedium, fontSize: 11)),
+                              color: AppColors.textMedium, fontSize: 12.5)),
                   ],
                 ),
               ),
@@ -1285,7 +1651,7 @@ class _CompactStrip extends StatelessWidget {
                             style: TextStyle(
                                 color: Colors.white,
                                 fontWeight: FontWeight.bold,
-                                fontSize: 12)),
+                                fontSize: 13)),
                       ],
                     ),
                   ),
@@ -1297,14 +1663,14 @@ class _CompactStrip extends StatelessWidget {
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
                     decoration: BoxDecoration(
-                      color: p._nextColor,
+                      color: p.color,
                       borderRadius: BorderRadius.circular(20),
                     ),
-                    child: Text(p._nextLabel,
+                    child: Text(p.journey.primaryLabel,
                         style: const TextStyle(
                             color: Colors.white,
                             fontWeight: FontWeight.bold,
-                            fontSize: 12)),
+                            fontSize: 13)),
                   ),
                 ),
 
@@ -1439,7 +1805,7 @@ class _NavBanner extends StatelessWidget {
                 'ETA ${route.arrivalText()}',
                 style: TextStyle(
                     color: Colors.white.withValues(alpha: 0.85),
-                    fontSize: 12,
+                    fontSize: 13,
                     fontWeight: FontWeight.w600),
               ),
             ],
@@ -1451,7 +1817,7 @@ class _NavBanner extends StatelessWidget {
             Text(
               'Approximate — live routing unavailable',
               style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.6), fontSize: 11),
+                  color: Colors.white.withValues(alpha: 0.6), fontSize: 12.5),
             ),
           ],
         ],
@@ -1490,5 +1856,89 @@ class _NavBanner extends StatelessWidget {
       return Icons.place_rounded;
     }
     return Icons.straight_rounded;
+  }
+}
+
+
+/// Names the leg the crew is on, and gives them a way out of it.
+class _LegBanner extends StatelessWidget {
+  final String title;
+  final String subtitle;
+  final IconData icon;
+  final Color colour;
+  final String cancelLabel;
+  final VoidCallback onCancel;
+
+  const _LegBanner({
+    required this.title,
+    required this.subtitle,
+    required this.icon,
+    required this.colour,
+    required this.cancelLabel,
+    required this.onCancel,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: colour.withValues(alpha: 0.35)),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withValues(alpha: 0.08),
+              blurRadius: 14,
+              offset: const Offset(0, 4)),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: colour.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(icon, size: 19, color: colour),
+          ),
+          const SizedBox(width: 11),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: AppColors.textDark)),
+                const SizedBox(height: 1),
+                Text(subtitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        fontSize: 12.5, color: AppColors.textLight)),
+              ],
+            ),
+          ),
+          TextButton(
+            onPressed: onCancel,
+            style: TextButton.styleFrom(
+              foregroundColor: AppColors.emergency,
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              minimumSize: const Size(0, 34),
+            ),
+            child: Text(cancelLabel,
+                style: const TextStyle(
+                    fontSize: 12.5, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
   }
 }

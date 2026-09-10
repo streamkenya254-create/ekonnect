@@ -75,11 +75,6 @@ class _SplashScreenState extends State<SplashScreen> {
 
     if (!mounted) return;
 
-    if (!auth.hasAcceptedTerms) {
-      go(AppRoutes.terms);
-      return;
-    }
-
     // Deliberately no profile gate here.
     //
     // Signing up in the app means you are an emergency user — there is no role

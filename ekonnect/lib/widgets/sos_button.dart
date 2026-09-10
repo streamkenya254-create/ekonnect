@@ -39,7 +39,7 @@ class SOSButton extends StatelessWidget {
               label,
               style: const TextStyle(
                 color: Colors.white,
-                fontSize: 11,
+                fontSize: 12.5,
                 fontWeight: FontWeight.bold,
               ),
               textAlign: TextAlign.center,

@@ -43,6 +43,8 @@ dependencies:
   # Voice: spoken turn-by-turn guidance, and spoken emergency reporting
   flutter_tts: ^4.2.5
   speech_to_text: ^7.4.0
+  image_picker: ^1.2.3
+  flutter_local_notifications: ^22.3.0
 
 dev_dependencies:
   flutter_test:
@@ -55,6 +57,8 @@ flutter:
   assets:
     - assets/images/
     - assets/images/logo.png
+    - assets/icon/logo-purple.png
+    - assets/images/ambulance.png
 
 flutter_launcher_icons:
   android: true

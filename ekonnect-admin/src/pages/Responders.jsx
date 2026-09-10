@@ -1,12 +1,22 @@
 import { useState, useEffect, useMemo } from 'react'
 import { collection, onSnapshot, doc, updateDoc, serverTimestamp } from 'firebase/firestore'
 import { db, auth } from '../firebase'
+import { withTimeout, friendlyError } from '../utils/withTimeout'
 import { useTeams } from '../hooks/useTeams'
+import ResponderApplications from '../components/ResponderApplications'
 
 const ROLE_META = {
-  ambulance:    { label: 'Ambulance',    emoji: '🚑', color: 'bg-blue-100 text-blue-700' },
-  practitioner: { label: 'Practitioner', emoji: '🩺', color: 'bg-violet-100 text-violet-700' },
+  ambulance:        { label: 'Ambulance',        color: 'bg-blue-100 text-blue-700' },
+  practitioner:     { label: 'Practitioner',     color: 'bg-violet-100 text-violet-700' },
+  care_point_admin: { label: 'Care Point admin', color: 'bg-amber-100 text-amber-800' },
 }
+
+/** What each role can do, shown next to the choice rather than assumed. */
+const ROLE_OPTIONS = [
+  { value: 'ambulance',        label: 'Ambulance driver',   sub: 'Takes calls and transports' },
+  { value: 'practitioner',     label: 'Practitioner',       sub: 'Clinical care on scene' },
+  { value: 'care_point_admin', label: 'Care Point admin',   sub: 'Runs the facility portal — no dispatch' },
+]
 
 const STATUS_META = {
   verified:  { label: 'Verified',  color: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
@@ -16,9 +26,8 @@ const STATUS_META = {
 }
 
 const TABS = [
-  { key: 'pending',   label: '⏳ Awaiting review' },
-  { key: 'responders', label: '🚑 Responders' },
-  { key: 'candidates', label: '👤 App users' },
+  { key: 'pending',    label: 'Awaiting review' },
+  { key: 'responders', label: 'Responders' },
 ]
 
 /**
@@ -26,9 +35,10 @@ const TABS = [
  *
  * Responders can no longer register themselves in the mobile app — anyone could
  * previously tick "Ambulance Driver" and start receiving real emergencies. They
- * sign up as ordinary users; an admin promotes them here, attaches them to an
- * organisation, and decides whether they serve the public network or only their
- * own subscribers.
+ * apply at /apply, or are submitted by the Care Point that employs them. An
+ * administrator checks the licence, and approving creates their login and
+ * emails them a link to set a password. Nobody is promoted out of an ordinary
+ * account any more — being a responder starts with a licence somebody checked.
  */
 export default function Responders() {
   const [users, setUsers] = useState([])
@@ -55,12 +65,12 @@ export default function Responders() {
     () => responders.filter(r => (r.verificationStatus ?? 'pending') === 'pending'),
     [responders],
   )
-  const candidates = useMemo(
+  const _unusedCandidates = useMemo(
     () => users.filter(u => u.role === 'user'),
     [users],
   )
 
-  const list = tab === 'pending' ? pending : tab === 'responders' ? responders : candidates
+  const list = tab === 'pending' ? pending : responders
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
     if (!q) return list
@@ -73,15 +83,20 @@ export default function Responders() {
   const online = responders.filter(r => r.isOnline).length
 
   return (
-    <div className="p-4 sm:p-6 max-w-7xl mx-auto">
+    <div className="px-4 sm:px-8 lg:px-12 py-8">
       <div className="page-header">
         <div>
-          <h1 className="page-title">Responders</h1>
-          <p className="page-subtitle">
-            Promote app users to responders, then verify them before they can go on duty
+          <span className="eyebrow block mb-2">People</span>
+          <p className="page-subtitle max-w-xl">
+            Promote app users to responders, then verify them before they can go
+            on duty. Care Points submit their own crews for approval here too.
           </p>
         </div>
       </div>
+
+      {/* One queue for both doors: people who applied at /apply and people
+          their Care Point submitted on their behalf. */}
+      <ResponderApplications />
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4 mb-6">
         <Stat value={responders.length} label="Responders" />
@@ -137,7 +152,7 @@ export default function Responders() {
         </div>
       ) : filtered.length === 0 ? (
         <div className="card text-center py-16">
-          <div className="text-5xl mb-3">{tab === 'pending' ? '✅' : '👥'}</div>
+          <img src="/assets/doctor.svg" alt="" className="w-14 h-14 mx-auto mb-4 opacity-30" />
           <p className="text-gray-400">
             {tab === 'pending' ? 'Nothing waiting for review' : 'No one here'}
           </p>
@@ -200,7 +215,7 @@ function PersonCard({ person: p, teams, onManage }) {
         {isResponder ? (
           <>
             <span className={`text-xs font-medium px-2.5 py-0.5 rounded-full ${role.color}`}>
-              {role.emoji} {role.label}
+              {role.label}
             </span>
             <span className={`text-xs font-medium px-2.5 py-0.5 rounded-full border ${status.color}`}>
               {status.label}
@@ -257,6 +272,7 @@ function ManageDialog({ person: p, teams, onClose }) {
   const [specialization, setSpec] = useState(p.specialization ?? '')
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
 
   const team = teams.find(t => t.id === teamId)
 
@@ -268,8 +284,9 @@ function ManageDialog({ person: p, teams, onClose }) {
 
   async function apply(verificationStatus) {
     setBusy(true)
+    setErr('')
     try {
-      await updateDoc(doc(db, 'users', p.id), {
+      await withTimeout(updateDoc(doc(db, 'users', p.id), {
         role,
         teamId: teamId || null,
         visibility,
@@ -283,8 +300,10 @@ function ManageDialog({ person: p, teams, onClose }) {
         verifiedAt: serverTimestamp(),
         // Anyone not currently approved must come off the live network at once.
         ...(verificationStatus === 'verified' ? {} : { isAvailable: false }),
-      })
+      }), 15000, 'Saving responder')
       onClose()
+    } catch (e) {
+      setErr(friendlyError(e))
     } finally {
       setBusy(false)
     }
@@ -292,8 +311,9 @@ function ManageDialog({ person: p, teams, onClose }) {
 
   async function demote() {
     setBusy(true)
+    setErr('')
     try {
-      await updateDoc(doc(db, 'users', p.id), {
+      await withTimeout(updateDoc(doc(db, 'users', p.id), {
         role: 'user',
         activeMode: null,
         teamId: null,
@@ -303,8 +323,10 @@ function ManageDialog({ person: p, teams, onClose }) {
         isAvailable: false,
         verifiedBy: auth.currentUser?.uid ?? null,
         verifiedAt: serverTimestamp(),
-      })
+      }), 15000, 'Removing responder status')
       onClose()
+    } catch (e) {
+      setErr(friendlyError(e))
     } finally {
       setBusy(false)
     }
@@ -322,22 +344,27 @@ function ManageDialog({ person: p, teams, onClose }) {
         </div>
 
         <div className="p-5 space-y-4">
-          <Field label="Responder type">
-            <div className="grid grid-cols-2 gap-2">
-              {['ambulance', 'practitioner'].map(r => (
+          <Field label="Role">
+            <div className="grid sm:grid-cols-3 gap-2">
+              {ROLE_OPTIONS.map(r => (
                 <button
-                  key={r}
-                  onClick={() => setRole(r)}
-                  className={`py-2 rounded-lg text-sm font-medium border transition-colors ${
-                    role === r
-                      ? 'border-primary bg-primary/5 text-primary'
-                      : 'border-gray-200 text-gray-600 hover:bg-gray-50'
-                  }`}
+                  key={r.value}
+                  onClick={() => setRole(r.value)}
+                  className={`tile !p-3 ${role === r.value ? 'tile-on' : 'tile-off'}`}
                 >
-                  {ROLE_META[r].emoji} {ROLE_META[r].label}
+                  <span className="block text-sm font-semibold">{r.label}</span>
+                  <span className="block text-[11px] opacity-70 mt-0.5 leading-snug">{r.sub}</span>
                 </button>
               ))}
             </div>
+            {role === 'care_point_admin' && (
+              <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mt-2 leading-relaxed">
+                Signs in to the Care Point portal for the facility selected
+                below and manages its fleet and crew. They are never dispatched,
+                and see nothing outside that facility — so a Care Point must be
+                chosen for this role to work.
+              </p>
+            )}
           </Field>
 
           <Field label="Organisation">
@@ -401,6 +428,15 @@ function ManageDialog({ person: p, teams, onClose }) {
         </div>
 
         <div className="sticky bottom-0 bg-white border-t border-gray-100 p-4 space-y-2">
+          {err && (
+            <div
+              role="alert"
+              className="flex gap-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2.5 mb-1"
+            >
+              <span aria-hidden>⚠</span>
+              <span>{err}</span>
+            </div>
+          )}
           <button
             disabled={busy}
             onClick={() => apply('verified')}

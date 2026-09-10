@@ -96,7 +96,7 @@ class IncidentCardWidget extends StatelessWidget {
                       Text(
                         DateFormat('HH:mm').format(incident.createdAt),
                         style: const TextStyle(
-                            color: AppColors.textLight, fontSize: 11),
+                            color: AppColors.textLight, fontSize: 12.5),
                       ),
                     ],
                   ),
@@ -114,7 +114,7 @@ class IncidentCardWidget extends StatelessWidget {
                     urgencyLabel,
                     style: TextStyle(
                         color: urgency,
-                        fontSize: 10,
+                        fontSize: 11.5,
                         fontWeight: FontWeight.bold,
                         letterSpacing: 0.5),
                   ),
@@ -136,7 +136,7 @@ class IncidentCardWidget extends StatelessWidget {
                         ? incident.userName
                         : 'Unknown',
                     style: const TextStyle(
-                        color: AppColors.textMedium, fontSize: 13),
+                        color: AppColors.textMedium, fontSize: 14),
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
@@ -146,7 +146,7 @@ class IncidentCardWidget extends StatelessWidget {
                 Text(
                   _timeAgo(incident.createdAt),
                   style: const TextStyle(
-                      color: AppColors.textMedium, fontSize: 13),
+                      color: AppColors.textMedium, fontSize: 14),
                 ),
               ],
             ),
@@ -175,7 +175,7 @@ class IncidentCardWidget extends StatelessWidget {
                           style: TextStyle(
                               color: color,
                               fontWeight: FontWeight.bold,
-                              fontSize: 12),
+                              fontSize: 13),
                         ),
                       ],
                     ),

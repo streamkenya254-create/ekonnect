@@ -72,6 +72,14 @@
             </intent-filter>
         </service>
 
+        <!-- The channel a message lands on when the app is not running and
+             Android draws the notification itself. Must match the id created
+             in FCMService, or those alerts fall back to a low-importance
+             channel and never make a sound. -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="ekonnect_alerts"/>
+
         <meta-data
             android:name="flutterEmbedding"
             android:value="2"/>
@@ -84,6 +92,17 @@
         </intent>
         <intent>
             <action android:name="android.intent.action.CALL"/>
+            <data android:scheme="tel"/>
+        </intent>
+        <!-- Android 11+ hides other apps unless they are declared here.
+             Without this, canLaunchUrl() reports false for https and the
+             Terms link simply did nothing when tapped. -->
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="https"/>
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.DIAL"/>
             <data android:scheme="tel"/>
         </intent>
     </queries>

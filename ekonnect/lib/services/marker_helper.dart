@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -50,6 +51,99 @@ class MarkerHelper {
       icon: Icons.person_rounded,
       badgeText: initials,
     );
+  }
+
+  /// A person's own face as a map pin.
+  ///
+  /// The two dots on a tracking map are two people, and a truck glyph beside a
+  /// generic person glyph says less about who is coming than their photograph
+  /// does. Falls back to initials when there is no photo, so the pin is never
+  /// empty and never blocks on a download.
+  ///
+  /// [cacheKey] must be stable per person *and* per photo — pass the uid plus
+  /// something that changes when the picture does, or the old face is reused.
+  static Future<BitmapDescriptor> photoPin({
+    required String cacheKey,
+    required Color ringColor,
+    Uint8List? photo,
+    String initials = '',
+    double px = 112,
+  }) async {
+    if (_cache.containsKey(cacheKey)) return _cache[cacheKey]!;
+
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    final r = px / 2;
+    final totalH = px * 1.42;
+
+    // Shadow, then the coloured ring and its teardrop tail.
+    canvas.drawCircle(
+        Offset(r + 2, r + 3),
+        r * 0.9,
+        Paint()
+          ..color = Colors.black.withValues(alpha: 0.28)
+          ..maskFilter = const ui.MaskFilter.blur(ui.BlurStyle.normal, 5));
+
+    final ring = Paint()..color = ringColor;
+    canvas.drawPath(
+        Path()
+          ..moveTo(r - r * 0.2, px * 0.74)
+          ..quadraticBezierTo(r, totalH, r + r * 0.2, px * 0.74)
+          ..close(),
+        ring);
+    canvas.drawCircle(Offset(r, r), r * 0.9, ring);
+    canvas.drawCircle(Offset(r, r), r * 0.78, Paint()..color = Colors.white);
+
+    final inner = r * 0.7;
+    ui.Image? decoded;
+    if (photo != null) {
+      try {
+        decoded = await decodeImageFromList(photo);
+      } catch (_) {
+        // A corrupt photo must not cost the patient their map pin.
+      }
+    }
+
+    if (decoded != null) {
+      canvas.save();
+      canvas.clipPath(Path()
+        ..addOval(Rect.fromCircle(center: Offset(r, r), radius: inner)));
+      // Cover, not stretch: faces survive a square crop, not a squash.
+      final side = decoded.width < decoded.height
+          ? decoded.width.toDouble()
+          : decoded.height.toDouble();
+      canvas.drawImageRect(
+        decoded,
+        Rect.fromCenter(
+          center: Offset(decoded.width / 2, decoded.height / 2),
+          width: side,
+          height: side,
+        ),
+        Rect.fromCircle(center: Offset(r, r), radius: inner),
+        Paint()..isAntiAlias = true,
+      );
+      canvas.restore();
+    } else {
+      canvas.drawCircle(Offset(r, r), inner,
+          Paint()..color = ringColor.withValues(alpha: 0.14));
+      _drawText(
+          canvas,
+          initials.isEmpty
+              ? '?'
+              : (initials.length > 2 ? initials.substring(0, 2) : initials),
+          Offset(r, r),
+          r * 0.42,
+          ringColor,
+          FontWeight.bold);
+    }
+
+    final img = await recorder
+        .endRecording()
+        .toImage(px.toInt(), totalH.toInt());
+    final bytes = await img.toByteData(format: ui.ImageByteFormat.png);
+    final marker = BitmapDescriptor.bytes(bytes!.buffer.asUint8List());
+    _cache[cacheKey] = marker;
+    return marker;
   }
 
   /// Small colored dot for a live responder position on the "near you" map.

@@ -19,6 +19,19 @@ import 'routes_service.dart';
 ///
 /// Registered points are never displaced by Places results: a responder should
 /// see the facility that has said "we can take this" before an unknown one.
+/// What a nearby search found, and whether Google discovery worked.
+///
+/// The two are separate on purpose: "no registered Care Point near you" and
+/// "we could not reach Google" need different words in front of a crew
+/// standing over a patient.
+class NearbyResult {
+  final List<CarePoint> points;
+  final String? discoveryError;
+  const NearbyResult(this.points, {this.discoveryError});
+
+  bool get discoveryFailed => discoveryError != null;
+}
+
 class CarePointService {
   CarePointService._();
 
@@ -33,15 +46,43 @@ class CarePointService {
   ///
   /// [need] is what the responder is looking for, free text — "severe burns",
   /// "maternity", "trauma surgery". It drives the AI ranking.
-  static Future<List<CarePoint>> findNearby({
+  /// Registered Care Points only — one Firestore read, sorted by distance.
+  ///
+  /// Split out so the sheet can paint something immediately. Everything else
+  /// here is slow by nature (a Places call, an LLM, billed routing) and used to
+  /// run in series before a single row appeared.
+  static Future<List<CarePoint>> registeredNearby(
+    LatLng origin, {
+    double radiusMetres = 15000,
+  }) async {
+    final registered = await _registeredNear(origin, radiusMetres);
+    return registered
+        .map((c) => c.withRanking(
+            distanceMeters:
+                RoutesService.metresBetween(origin, LatLng(c.lat, c.lng))))
+        .toList()
+      ..sort((a, b) => a.distanceMeters!.compareTo(b.distanceMeters!));
+  }
+
+  static Future<NearbyResult> findNearby({
     required LatLng origin,
     required String incidentType,
     String? need,
     double radiusMetres = 15000,
     int limit = 6,
   }) async {
-    final registered = await _registeredNear(origin, radiusMetres);
-    final discovered = await _placesNear(origin, incidentType, radiusMetres);
+    // In parallel: the registry does not need to wait on Google, and Google is
+    // the slow one — or, when the Places API is blocked, the failing one.
+    String? discoveryError;
+    final results = await Future.wait([
+      _registeredNear(origin, radiusMetres),
+      _placesNear(origin, incidentType, radiusMetres).catchError((e) {
+        discoveryError = e is StateError ? e.message : e.toString();
+        return <CarePoint>[];
+      }),
+    ]);
+    final registered = results[0];
+    final discovered = results[1];
 
     // De-duplicate: a registered hospital will usually also appear in Places.
     // Registered wins, since it carries service data.
@@ -54,7 +95,7 @@ class CarePointService {
     ];
 
     final ranked = await _rank(merged, origin, incidentType, need, limit);
-    return ranked;
+    return NearbyResult(ranked, discoveryError: discoveryError);
   }
 
   /// Name + rough location, so the same place from two sources collapses.
@@ -111,7 +152,14 @@ class CarePointService {
           )
           .timeout(const Duration(seconds: 12));
 
-      if (res.statusCode != 200) return const [];
+      if (res.statusCode != 200) {
+        // Swallowing this returned an empty list indistinguishable from "no
+        // hospitals near you", which is how a blocked API key looked like an
+        // empty result. Say what actually happened instead.
+        throw StateError(res.statusCode == 403
+            ? 'Google search is not enabled for this app yet.'
+            : 'Google search failed (${res.statusCode}).');
+      }
       final data = jsonDecode(res.body) as Map<String, dynamic>;
       final places = data['places'] as List? ?? const [];
 
@@ -227,22 +275,27 @@ class CarePointService {
   static Future<List<CarePoint>> withTravelTimes(
       List<CarePoint> points, LatLng origin,
       {int howMany = 3}) async {
-    final out = <CarePoint>[];
-    for (var i = 0; i < points.length; i++) {
-      final c = points[i];
-      if (i >= howMany) {
-        out.add(c);
-        continue;
+    // Concurrently, not one after another: three sequential route calls added
+    // seconds to a sheet a crew is holding open at the patient's side.
+    final head = points.take(howMany).toList();
+    final tail = points.skip(howMany).toList();
+
+    final routed = await Future.wait(head.map((c) async {
+      try {
+        final route = await RoutesService.compute(
+          origin: origin,
+          destination: LatLng(c.lat, c.lng),
+        );
+        return c.withRanking(
+            travelTime: route.isEstimate ? null : route.duration);
+      } catch (_) {
+        // A missing travel time is a smaller loss than a sheet that never
+        // finishes loading.
+        return c;
       }
-      final route = await RoutesService.compute(
-        origin: origin,
-        destination: LatLng(c.lat, c.lng),
-      );
-      out.add(c.withRanking(
-        travelTime: route.isEstimate ? null : route.duration,
-      ));
-    }
-    return out;
+    }));
+
+    return [...routed, ...tail];
   }
 
   // ── Registry management ────────────────────────────────────────────────────

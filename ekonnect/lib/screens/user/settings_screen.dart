@@ -1,174 +1,221 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
+
 import '../../core/constants.dart';
 import '../../providers/auth_provider.dart';
 
+/// Account settings.
+///
+/// Deliberately short. Everything that was here to fill the page — the AI
+/// blurb, a version row, a subtitle under each item restating its own label —
+/// told the user nothing they had asked for. What is left is the two things
+/// they may need to change, the two documents they may need to read, and the
+/// way out.
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
 
+  static final _privacy = Uri.parse('https://ekonnectapp.web.app/privacy');
+
   @override
   Widget build(BuildContext context) {
-    final auth = context.read<AuthProvider>();
+    final user = context.watch<AuthProvider>().user;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Settings')),
       backgroundColor: AppColors.background,
+      appBar: AppBar(
+        backgroundColor: AppColors.background,
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_ios_new,
+              size: 20, color: AppColors.textDark),
+          onPressed: () => Navigator.maybePop(context),
+        ),
+        title: const Text('Settings', style: AppText.appBarTitle),
+      ),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(20, 8, 20, 40),
         children: [
-          _SectionHeader('Account'),
-          _Tile(
-            icon: Icons.person_outline,
-            color: AppColors.primary,
-            title: auth.user?.name ?? 'User',
-            subtitle: auth.user?.email ?? auth.user?.phone ?? '',
-            trailing: IconButton(
-              icon: const Icon(Icons.edit_outlined, size: 20),
-              onPressed: () => Navigator.pushNamed(context, AppRoutes.profile),
+          // One card, because these are one thing: how we reach you.
+          _Group(children: [
+            _Value(
+              label: 'Email & sign in',
+              value: user?.email ?? '',
+              onEdit: () => Navigator.pushNamed(context, AppRoutes.profile,
+                  arguments: {'edit': true}),
             ),
-          ),
+            _Value(
+              label: 'Phone',
+              value: user?.phone ?? '',
+              placeholder: 'Not set',
+              onEdit: () => Navigator.pushNamed(context, AppRoutes.profile,
+                  arguments: {'edit': true}),
+            ),
+          ]),
 
-          const SizedBox(height: 16),
-          _SectionHeader('About'),
-          _Tile(
-            icon: Icons.smart_toy_outlined,
-            color: AppColors.primary,
-            title: 'AI Emergency Assistant',
-            subtitle: 'Powered by Groq — no setup needed',
-          ),
-          _Tile(
-            icon: Icons.info_outline,
-            color: AppColors.info,
-            title: 'App Version',
-            subtitle: 'eKonnect v1.0.0',
-          ),
-          _Tile(
+          const SizedBox(height: AppSpacing.xl),
+
+          _Row(
             icon: Icons.shield_outlined,
-            color: AppColors.success,
-            title: 'Privacy Policy',
-            subtitle: 'How we use your data',
-            onTap: () {},
+            label: 'Privacy Policy',
+            // Was an empty onTap that looked tappable and did nothing.
+            onTap: () => launchUrl(_privacy,
+                mode: LaunchMode.externalApplication),
           ),
-          _Tile(
+          _Row(
             icon: Icons.description_outlined,
-            color: AppColors.textMedium,
-            title: 'Terms of Service',
-            subtitle: 'Usage agreement',
-            onTap: () {},
+            label: 'Terms of Service',
+            onTap: () => launchUrl(_privacy,
+                mode: LaunchMode.externalApplication),
           ),
 
-          const SizedBox(height: 16),
-          _SectionHeader('Session'),
-          _Tile(
-            icon: Icons.logout,
-            color: AppColors.emergency,
-            title: 'Sign Out',
-            subtitle: 'Log out of your account',
-            onTap: () async {
-              final confirmed = await showDialog<bool>(
-                context: context,
-                builder: (ctx) => AlertDialog(
-                  title: const Text('Sign Out'),
-                  content: const Text('Are you sure you want to sign out?'),
-                  actions: [
-                    TextButton(
-                        onPressed: () => Navigator.pop(ctx, false),
-                        child: const Text('Cancel')),
-                    TextButton(
-                        onPressed: () => Navigator.pop(ctx, true),
-                        child: const Text('Sign Out',
-                            style: TextStyle(color: AppColors.emergency))),
-                  ],
-                ),
-              );
-              if (confirmed == true && context.mounted) {
-                await context.read<AuthProvider>().signOut();
-                if (context.mounted) {
-                  Navigator.pushNamedAndRemoveUntil(
-                      context, AppRoutes.login, (_) => false);
-                }
-              }
-            },
+          const SizedBox(height: AppSpacing.xl),
+
+          OutlinedButton(
+            onPressed: () => _signOut(context),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: AppColors.emergency,
+              side: const BorderSide(color: AppColors.divider, width: 1.5),
+            ),
+            child: const Text('Sign out'),
           ),
-          const SizedBox(height: 32),
+
+          const SizedBox(height: AppSpacing.lg),
+          Center(
+            child: Text('eKonnect v1.0.0',
+                style: AppText.meta.copyWith(fontSize: 12)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _signOut(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Sign out?'),
+        content: const Text('You will need to sign in again to use the app.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              style: TextButton.styleFrom(
+                  foregroundColor: AppColors.emergency),
+              child: const Text('Sign out')),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+
+    final auth = context.read<AuthProvider>();
+    final nav = Navigator.of(context);
+    await auth.signOut();
+    nav.pushNamedAndRemoveUntil(AppRoutes.login, (_) => false);
+  }
+}
+
+/// Related values in one bordered card, divided rather than separated.
+class _Group extends StatelessWidget {
+  final List<Widget> children;
+  const _Group({required this.children});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        border: Border.all(color: AppColors.divider),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (final c in children) ...[
+            c,
+            if (c != children.last)
+              const Divider(height: 1, color: AppColors.divider),
+          ],
         ],
       ),
     );
   }
 }
 
-class _SectionHeader extends StatelessWidget {
-  final String text;
-  const _SectionHeader(this.text);
+/// A label, what it is currently set to, and a way to change it.
+class _Value extends StatelessWidget {
+  final String label;
+  final String value;
+  final String placeholder;
+  final VoidCallback onEdit;
+
+  const _Value({
+    required this.label,
+    required this.value,
+    required this.onEdit,
+    this.placeholder = '—',
+  });
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(left: 4, bottom: 8),
-      child: Text(
-        text.toUpperCase(),
-        style: const TextStyle(
-          fontSize: 11,
-          fontWeight: FontWeight.bold,
-          color: AppColors.textLight,
-          letterSpacing: 0.8,
+    final shown = value.trim().isEmpty ? placeholder : value.trim();
+    return InkWell(
+      onTap: onEdit,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(18, 16, 12, 16),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(label, style: AppText.cardTitle),
+                  const SizedBox(height: AppSpacing.xs),
+                  Text(shown,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppText.body.copyWith(
+                          color: value.trim().isEmpty
+                              ? AppColors.textLight
+                              : AppColors.textMedium)),
+                ],
+              ),
+            ),
+            const Icon(Icons.edit_outlined,
+                size: 20, color: AppColors.textLight),
+          ],
         ),
       ),
     );
   }
 }
 
-class _Tile extends StatelessWidget {
+/// A plain destination. No card, no subtitle — the label is the whole message.
+class _Row extends StatelessWidget {
   final IconData icon;
-  final Color color;
-  final String title;
-  final String subtitle;
-  final Widget? trailing;
-  final VoidCallback? onTap;
+  final String label;
+  final VoidCallback onTap;
 
-  const _Tile({
-    required this.icon,
-    required this.color,
-    required this.title,
-    this.subtitle = '',
-    this.trailing,
-    this.onTap,
-  });
+  const _Row({required this.icon, required this.label, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.divider),
-      ),
-      child: ListTile(
-        onTap: onTap,
-        leading: Container(
-          width: 38,
-          height: 38,
-          decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.12),
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: Icon(icon, color: color, size: 20),
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(AppRadius.control),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 4),
+        child: Row(
+          children: [
+            Icon(icon, size: 22, color: AppColors.textDark),
+            const SizedBox(width: AppSpacing.md),
+            Expanded(child: Text(label, style: AppText.cardTitle)),
+            const Icon(Icons.chevron_right_rounded,
+                color: AppColors.textLight, size: 22),
+          ],
         ),
-        title: Text(title,
-            style:
-                const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
-        subtitle: subtitle.isNotEmpty
-            ? Text(subtitle,
-                style: const TextStyle(
-                    color: AppColors.textLight, fontSize: 12))
-            : null,
-        trailing: trailing ??
-            (onTap != null
-                ? const Icon(Icons.chevron_right, color: AppColors.textLight)
-                : null),
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       ),
     );
   }
